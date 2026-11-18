@@ -1,0 +1,4 @@
+{
+  "collection": "Demo.postman_collection.json",
+  "newman": { "timeoutRequest": 10000 }
+}

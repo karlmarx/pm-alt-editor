@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>treemerge</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --text: #1b1f24; --muted: #646b75; --line: #e2e5e9; --code: #fbfbfc; --hover: #eef0f3; --sel: #e4e8ff; --accent: #4f52d6;
+  --ours: #17753f; --ours-bg: #e4f6ea; --theirs: #1a63d8; --theirs-bg: #e5efff; --conf: #a85400; --conf-bg: #fff3dd; --conf-line: #f1c57a;
+  --del-bg: #ffeceb; --add-bg: #e6f8ec; --chg-a: #b9ebc8; --chg-b: #c2d9ff; --shadow: 0 1px 2px rgba(20, 24, 30, .06);
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace; --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101214; --panel: #181b1f; --text: #e7e9ec; --muted: #98a0aa; --line: #2a2f36; --code: #14171a; --hover: #20242a; --sel: #262a55; --accent: #9ea1ff;
+    --ours: #4cc487; --ours-bg: #10291c; --theirs: #74a9ff; --theirs-bg: #11213d; --conf: #f2a94f; --conf-bg: #33240e; --conf-line: #6b4a17;
+    --del-bg: #3a1618; --add-bg: #10291c; --chg-a: #1d5a3a; --chg-b: #1f3f78; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); display: flex; flex-direction: column; }
+button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+button:hover:not(:disabled) { background: var(--hover); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { button.primary { color: #101214; } }
+button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+button.ours { border-color: var(--ours); color: var(--ours); } button.theirs { border-color: var(--theirs); color: var(--theirs); }
+button.small { padding: 2px 8px; font-size: 12.5px; }
+kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; color: var(--muted); margin-left: 5px; }
+
+header { display: flex; align-items: center; gap: 14px; padding: 9px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header .brand { font-weight: 650; letter-spacing: -.01em; }
+header .file { font: 13px var(--mono); max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+header select { font: 13px var(--mono); color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; max-width: 46vw; }
+.sides { display: flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.tag { font: 600 11px/1 var(--sans); letter-spacing: .04em; padding: 4px 7px; border-radius: 4px; }
+.tag.ours { background: var(--ours-bg); color: var(--ours); } .tag.theirs { background: var(--theirs-bg); color: var(--theirs); } .tag.base { background: var(--hover); color: var(--muted); }
+header .grow { flex: 1; }
+.pill { font-size: 12.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px; }
+.pill.open { background: var(--conf-bg); color: var(--conf); } .pill.done { background: var(--ours-bg); color: var(--ours); } .pill.info { background: var(--hover); color: var(--muted); }
+
+.wrap { flex: 1; display: grid; grid-template-columns: minmax(260px, 340px) 1fr; min-height: 0; }
+aside { border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.tabs { display: flex; gap: 4px; padding: 10px 10px 6px; }
+.tabs button { flex: 1; padding: 5px 6px; font-size: 12.5px; }
+.tabs button[aria-pressed="true"] { background: var(--sel); border-color: var(--accent); }
+.search { margin: 0 10px 8px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--code); color: var(--text); font: inherit; }
+.list { overflow: auto; flex: 1; padding-bottom: 20px; }
+.group { padding: 9px 12px 3px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row { display: flex; align-items: baseline; gap: 8px; padding: 5px 12px 5px 14px; cursor: pointer; border-left: 3px solid transparent; }
+.row:hover { background: var(--hover); }
+.row.sel { background: var(--sel); border-left-color: var(--accent); }
+.row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .hint { font-size: 11.5px; color: var(--muted); max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; transform: translateY(1px); }
+.dot.conflict { background: var(--conf); } .dot.resolved { background: none; border: 2px solid var(--ours); } .dot.theirs { background: var(--theirs); } .dot.ours { background: var(--ours); }
+.dot.merged { background: linear-gradient(90deg, var(--ours) 50%, var(--theirs) 50%); } .dot.overridden { background: var(--muted); }
+.empty { padding: 26px 18px; color: var(--muted); }
+
+main { overflow: auto; padding: 18px 22px 60px; min-width: 0; }
+.crumb { color: var(--muted); font-size: 12.5px; }
+.title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 12px; }
+.title h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.banner { border: 1px solid var(--conf-line); background: var(--conf-bg); color: var(--conf); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+.banner.info { border-color: var(--line); background: var(--panel); color: var(--muted); }
+.code { font: 12.5px/1.5 var(--mono); tab-size: 4; }
+.ln { white-space: pre; padding: 0 12px; min-height: 1.5em; }
+.ln.del { background: var(--del-bg); } .ln.add { background: var(--add-bg); }
+.ln .sign { display: inline-block; width: 1.4ch; color: var(--muted); user-select: none; }
+.doc { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); padding: 6px 0; }
+.doc > .card { margin: 8px 10px; box-shadow: none; }
+.doc > .banner { margin: 6px 10px 10px; }
+.ctx { color: var(--muted); padding: 4px 6px; overflow-x: auto; }
+.gap { text-align: center; font: 12px var(--sans); color: var(--muted); padding: 3px 0; border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line); margin: 3px 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; box-shadow: var(--shadow); overflow: hidden; }
+.card > .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.card > .head .what { font-weight: 600; }
+.card > .head .btns { margin-left: auto; display: flex; gap: 5px; flex-wrap: wrap; }
+.card .body { overflow-x: auto; background: var(--code); padding: 5px 0; }
+.card.conflict { border-color: var(--conf-line); } .card.conflict > .head { background: var(--conf-bg); color: var(--conf); border-bottom-color: var(--conf-line); }
+.card.ours { border-left: 3px solid var(--ours); } .card.theirs { border-left: 3px solid var(--theirs); } .card.agree { border-left: 3px solid var(--muted); }
+.card.settled { border-left: 3px solid var(--ours); }
+.cols { display: grid; grid-template-columns: 1fr 1fr; }
+.cols > div { min-width: 0; overflow-x: auto; padding: 5px 0; background: var(--code); }
+.cols > div + div { border-left: 1px solid var(--line); }
+.colhead { font: 600 11px var(--sans); letter-spacing: .04em; padding: 2px 12px 5px; }
+.colhead.ours { color: var(--ours); } .colhead.theirs { color: var(--theirs); } .colhead.base { color: var(--muted); }
+.chg-a { background: var(--chg-a); border-radius: 2px; } .chg-b { background: var(--chg-b); border-radius: 2px; }
+details.base { border-top: 1px solid var(--line); } details.base summary { cursor: pointer; padding: 5px 12px; font-size: 12px; color: var(--muted); }
+textarea { width: 100%; min-height: 150px; font: 12.5px/1.5 var(--mono); tab-size: 4; color: var(--text); background: var(--code); border: 0; border-top: 1px solid var(--line); padding: 8px 12px; resize: vertical; display: block; }
+.editbar { display: flex; gap: 6px; padding: 7px 10px; border-top: 1px solid var(--line); }
+.three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+@media (max-width: 1000px) { .three { grid-template-columns: 1fr; } .wrap { grid-template-columns: 1fr; } aside { max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--line); } .cols { grid-template-columns: 1fr; } .cols > div + div { border-left: 0; border-top: 1px solid var(--line); } }
+.card.current { outline: 2px solid var(--accent); outline-offset: -1px; }
+.val { padding: 6px 0; margin: 0; max-height: 62vh; overflow: auto; background: var(--code); }
+.val.absent { color: var(--muted); font-family: var(--sans); font-style: italic; padding: 8px 12px; }
+.badge { font: 600 10.5px var(--sans); letter-spacing: .04em; padding: 2px 6px; border-radius: 4px; background: var(--sel); color: var(--accent); }
+#toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .15s; pointer-events: none; max-width: 80vw; }
+#toast.on { opacity: .96; }
+.finished { margin: 14vh auto; text-align: center; color: var(--muted); max-width: 46ch; }
+.finished h1 { color: var(--text); font-size: 20px; }
+.help { font-size: 12px; color: var(--muted); padding: 8px 12px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<header id="header"></header>
+<div class="wrap"><aside><div class="tabs" id="tabs"></div><input class="search" id="search" type="search" placeholder="Filter by name" aria-label="Filter by name"><div class="list" id="list"></div><div class="help">Keys: <b>j / k</b> move, <b>n</b> next conflict, <b>1</b> ours, <b>2</b> theirs, <b>3</b> both, <b>u</b> undo</div></aside><main id="main"></main></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script>
+'use strict';
+const K = new URLSearchParams(location.search).get('k');
+const S = { docs: [], i: 0, doc: null, key: null, det: null, tab: 'conflicts', q: '', edit: null };
+const $ = id => document.getElementById(id);
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) { if (v == null || v === false) continue; if (k === 'class') el.className = v; else if (k.startsWith('on')) el.addEventListener(k.slice(2), v); else if (k === 'text') el.textContent = v; else el.setAttribute(k, v === true ? '' : v); }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid);
+  return el;
+}
+const put = (el, ...kids) => el.replaceChildren(...kids.flat(2).filter(k => k != null && k !== false));
+async function api(p, body) {
+  const r = await fetch(p + (p.includes('?') ? '&' : '?') + 'k=' + K, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : undefined);
+  const j = await r.json();
+  if (!r.ok || (j && j.error)) throw new Error((j && j.error) || r.statusText);
+  return j;
+}
+let toastTimer;
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), 3200); }
+const guard = fn => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message); } };
+const STATUS = { conflict: 'needs you', resolved: 'settled by you', theirs: 'from THEIRS', ours: 'from OURS', merged: 'combined', overridden: 'changed by you' };
+
+/* ---------- data ---------- */
+const visible = () => S.doc.entries.filter(e => (S.tab === 'all' || (S.tab === 'conflicts' ? e.n : !e.n)) && (!S.q || (e.group + ' ' + e.field).toLowerCase().includes(S.q)));
+async function loadDoc(i, keepKey) {
+  S.i = i; S.doc = await api('/api/doc?i=' + i);
+  const c = S.doc.counts;
+  if (!keepKey) { S.tab = c.conflict + c.resolved ? 'conflicts' : 'changes'; S.key = null; S.det = null; }
+  renderHeader(); renderTabs(); renderList();
+  if (!keepKey) { const first = S.doc.entries.find(e => e.status === 'conflict') || visible()[0]; if (first) await select(first.key); else renderMain(); }
+}
+async function select(key) {
+  S.key = key; S.edit = null;
+  S.det = await api('/api/entry?i=' + S.i + '&key=' + encodeURIComponent(key));
+  renderList(); renderMain(true);
+  const row = document.querySelector('.row.sel'); if (row) row.scrollIntoView({ block: 'nearest' });
+}
+async function choose(choice) {
+  const was = S.det.status;
+  const r = await api('/api/choose?i=' + S.i, { key: S.key, choice });
+  S.doc = r.doc; S.det = r.entry; S.edit = null;
+  S.docs[S.i].open = S.doc.counts.conflict;
+  renderHeader(); renderTabs(); renderList(); renderMain();
+  if (was === 'conflict' && S.det.status !== 'conflict') {
+    const next = nextConflictKey();
+    if (next) { toast('Settled. On to the next conflict.'); await select(next); } else toast(S.docs.some(d => d.open) ? 'This file is done. Another file still has conflicts.' : 'All conflicts settled. Save when you are ready.');
+  }
+}
+function nextConflictKey() {
+  const E = S.doc.entries, at = E.findIndex(e => e.key === S.key);
+  for (let d = 1; d <= E.length; d++) { const e = E[(at + d) % E.length]; if (e.status === 'conflict' && e.key !== S.key) return e.key; }
+  return null;
+}
+async function save(close) {
+  const r = await api('/api/save', { add: true });
+  toast(r.messages.join('  |  '));
+  if (close) { await api('/api/close', {}); document.body.replaceChildren(h('div', { class: 'finished' }, h('h1', { text: 'Saved. You can close this tab.' }), h('p', { text: r.messages.join(' ') }), h('p', { text: 'The terminal shows what to do next.' }))); }
+}
+
+/* ---------- header + list ---------- */
+function renderHeader() {
+  const d = S.doc, c = d.counts, total = S.docs.reduce((n, x) => n + x.open, 0);
+  const file = S.docs.length > 1 ? h('select', { 'aria-label': 'File', onchange: guard(e => loadDoc(+e.target.value)) }, S.docs.map(x => h('option', { value: x.i, selected: x.i === S.i, text: (x.open ? '(' + x.open + ') ' : '') + x.file }))) : h('span', { class: 'file', title: d.file, text: d.file });
+  put($('header'),
+    h('span', { class: 'brand', text: 'treemerge' }), file,
+    h('span', { class: 'sides' }, h('span', { class: 'tag ours', text: 'OURS' }), h('span', { text: d.labels.ours }), h('span', { text: '←' }), h('span', { class: 'tag theirs', text: 'THEIRS' }), h('span', { text: d.labels.theirs })),
+    h('span', { class: 'grow' }),
+    d.preview ? h('span', { class: 'pill info', text: 'preview: nothing will be written' }) : null,
+    h('span', { class: 'pill ' + (total ? 'open' : 'done'), id: 'progress', text: total ? total + (total === 1 ? ' conflict left' : ' conflicts left') : c.resolved ? 'all conflicts settled' : 'no conflicts' }),
+    h('button', { onclick: guard(() => save(false)), disabled: d.preview, text: 'Save' }),
+    h('button', { class: 'primary', id: 'saveclose', onclick: guard(() => save(true)), text: d.preview ? 'Close' : 'Save & close' }));
+}
+function renderTabs() {
+  const c = S.doc.counts, n = { conflicts: c.conflict + c.resolved, changes: c.theirs + c.ours + c.merged + c.overridden };
+  const tab = (id, label) => h('button', { 'aria-pressed': String(S.tab === id), onclick: () => { S.tab = id; renderTabs(); renderList(); }, text: label });
+  $('tabs').replaceChildren(tab('conflicts', 'Conflicts ' + n.conflicts), tab('changes', 'Merged ' + n.changes), tab('all', 'All'));
+}
+function renderList() {
+  const rows = visible(), out = []; let g = null;
+  for (const e of rows.slice(0, 3000)) {
+    if (e.group !== g) { g = e.group; out.push(h('div', { class: 'group', title: g, text: g })); }
+    out.push(h('div', { class: 'row' + (e.key === S.key ? ' sel' : ''), tabindex: 0, role: 'button', 'data-key': e.key, title: STATUS[e.status] + ' - ' + e.hint, onclick: guard(() => select(e.key)), onkeydown: ev => { if (ev.key === 'Enter') select(e.key); } },
+      h('span', { class: 'dot ' + e.status }), h('span', { class: 'name', text: e.field }), h('span', { class: 'hint', text: e.status === 'resolved' ? 'settled' : e.hint })));
+  }
+  if (rows.length > 3000) out.push(h('div', { class: 'empty', text: (rows.length - 3000) + ' more: use the filter box.' }));
+  if (!rows.length) out.push(h('div', { class: 'empty', text: S.tab === 'conflicts' ? 'No conflicts. Everything merged on its own; see the Merged tab for what changed.' : 'Nothing here.' }));
+  $('list').replaceChildren(...out);
+}
+
+/* ---------- main panel ---------- */
+function tokens(s) { return s.match(/\w+|\s+|[^\w\s]/g) || []; }
+function wordDiff(a, b) {                       // highlight what differs inside a pair of lines
+  const x = tokens(a), y = tokens(b);
+  if (x.length > 300 || y.length > 300) return [[{ t: a }], [{ t: b }]];
+  const W = y.length + 1, t = new Uint16Array((x.length + 1) * W);
+  for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--) t[i * W + j] = x[i] === y[j] ? t[(i + 1) * W + j + 1] + 1 : Math.max(t[(i + 1) * W + j], t[i * W + j + 1]);
+  const A = [], B = []; let i = 0, j = 0;
+  while (i < x.length && j < y.length) { if (x[i] === y[j]) { A.push({ t: x[i++] }); B.push({ t: y[j++] }); } else if (t[(i + 1) * W + j] >= t[i * W + j + 1]) A.push({ t: x[i++], c: 1 }); else B.push({ t: y[j++], c: 1 }); }
+  while (i < x.length) A.push({ t: x[i++], c: 1 }); while (j < y.length) B.push({ t: y[j++], c: 1 });
+  return [A, B];
+}
+function line(text, cls, sign, parts, chg) {
+  const el = h('div', { class: 'ln' + (cls ? ' ' + cls : '') });
+  if (sign != null) el.append(h('span', { class: 'sign', text: sign }));
+  if (parts) for (const p of parts) el.append(p.c && p.t.trim() ? h('span', { class: chg, text: p.t }) : p.t); else el.append(text);
+  return el;
+}
+const lines = (arr, cls, sign) => (arr.length ? arr.map(l => line(l, cls, sign)) : [h('div', { class: 'ln', style: 'color:var(--muted);font-style:italic' }, '(no lines)')]);
+const PICK = { ours: 'OURS', theirs: 'THEIRS', base: 'the original (neither change)', 'ours+theirs': 'both, OURS first', 'theirs+ours': 'both, THEIRS first' };
+function chunkCard(c, d, conflictNo, conflictTotal, firstOpen) {
+  const pick = hk => guard(() => choose({ hunk: c.i, pick: hk }));
+  if (S.edit && S.edit.i === c.i) {
+    const ta = h('textarea', { 'aria-label': 'Edit this block', spellcheck: 'false' }); ta.value = S.edit.text;
+    setTimeout(() => ta.focus(), 0);
+    return h('div', { class: 'card conflict' }, h('div', { class: 'head' }, h('span', { class: 'what', text: 'Write what this block should be' })), ta,
+      h('div', { class: 'editbar' }, h('button', { class: 'primary', onclick: guard(() => choose({ hunk: c.i, pick: { lines: ta.value.split('\n') } })), text: 'Use this' }), h('button', { onclick: () => { S.edit = null; renderMain(); }, text: 'Cancel' })));
+  }
+  if (c.t === 'conflict' && c.pick == null) {
+    const pair = c.ours.length === c.theirs.length, colA = [], colB = [];
+    c.ours.forEach((l, k) => { const w = pair ? wordDiff(l, c.theirs[k]) : null; colA.push(line(l, '', null, w && w[0], 'chg-a')); if (pair) colB.push(line(c.theirs[k], '', null, w[1], 'chg-b')); });
+    if (!pair) c.theirs.forEach(l => colB.push(line(l)));
+    return h('div', { class: 'card conflict', 'data-open': '1' },
+      h('div', { class: 'head' }, h('span', { class: 'what', text: 'Conflict ' + conflictNo + ' of ' + conflictTotal }), h('span', { text: 'both sides changed these lines' }),
+        h('div', { class: 'btns' },
+          h('button', { class: 'small ours', onclick: pick('ours') }, 'Ours', firstOpen ? h('kbd', { text: '1' }) : null), h('button', { class: 'small theirs', onclick: pick('theirs') }, 'Theirs', firstOpen ? h('kbd', { text: '2' }) : null),
+          h('button', { class: 'small', onclick: pick('ours+theirs') }, 'Both', firstOpen ? h('kbd', { text: '3' }) : null), h('button', { class: 'small', onclick: pick('theirs+ours'), title: 'Both, with THEIRS first', text: 'Both, theirs first' }),
+          h('button', { class: 'small', onclick: () => { S.edit = { i: c.i, text: c.both.join('\n') }; renderMain(); }, text: 'Edit' }))),
+      h('div', { class: 'cols code' }, h('div', {}, h('div', { class: 'colhead ours', text: 'OURS · ' + S.doc.labels.ours }), colA.length ? colA : lines([])), h('div', {}, h('div', { class: 'colhead theirs', text: 'THEIRS · ' + S.doc.labels.theirs }), colB.length ? colB : lines([]))),
+      c.base ? h('details', { class: 'base' }, h('summary', { text: 'What both sides started from (' + c.base.length + ' line' + (c.base.length === 1 ? '' : 's') + ')' }), h('div', { class: 'body code' }, lines(c.base))) : null);
+  }
+  const who = c.t === 'conflict' ? 'Conflict settled with ' + (typeof c.pick === 'object' ? 'your own text' : PICK[c.pick])
+    : c.pick != null ? 'You chose ' + (typeof c.pick === 'object' ? 'your own text' : PICK[c.pick])
+      : c.t === 'theirs' ? 'THEIRS changed this' : c.t === 'ours' ? 'OURS changed this' : 'Both sides made the same change';
+  const undoBtn = c.pick != null ? h('button', { class: 'small', onclick: pick(null), text: c.t === 'conflict' ? 'Choose again' : 'Back to automatic' }) : h('button', { class: 'small', onclick: pick('base'), title: 'Leave these lines as they were before either side changed them', text: 'Do not apply' });
+  return h('div', { class: 'card ' + (c.t === 'conflict' ? 'settled' : c.t) },
+    h('div', { class: 'head' }, h('span', { class: 'what', text: who }), c.pick == null ? h('span', { style: 'color:var(--muted)', text: 'applied automatically' }) : null, h('div', { class: 'btns' }, undoBtn)),
+    h('div', { class: 'body code' }, c.pick == null || c.pick !== 'base' ? (c.base || []).map(l => line(l, 'del', '-')) : [], (c.result || []).map(l => line(l, c.pick === 'base' ? '' : 'add', c.pick === 'base' ? ' ' : '+')), !(c.base || []).length && !(c.result || []).length ? lines([]) : []));
+}
+function textView(d) {
+  const out = [], conf = d.chunks.filter(c => c.t === 'conflict'), firstOpen = conf.find(c => c.pick == null);
+  if (d.custom) out.push(h('div', { class: 'banner info', text: 'You replaced this whole result by hand. "Start over" brings the blocks back.' }));
+  if (S.edit && S.edit.whole) {
+    const ta = h('textarea', { 'aria-label': 'Edit the whole result', spellcheck: 'false', style: 'min-height:55vh' }); ta.value = S.edit.text;
+    out.push(h('div', { class: 'card' }, h('div', { class: 'head' }, h('span', { class: 'what', text: 'The whole result, as it will be written' })), ta,
+      h('div', { class: 'editbar' }, h('button', { class: 'primary', onclick: guard(() => choose({ text: ta.value })), text: 'Use this' }), h('button', { onclick: () => { S.edit = null; renderMain(); }, text: 'Cancel' }))));
+    return out;
+  }
+  let n = 0;
+  for (const c of d.chunks) {
+    if (c.t === 'same') {
+      const body = c.lines ? c.lines.map(l => line(l)) : [...c.head.map(l => line(l)), h('div', { class: 'gap', text: (c.n - 6) + ' unchanged lines' }), ...c.tail.map(l => line(l))];
+      out.push(h('div', { class: 'ctx code' }, body));
+    } else out.push(chunkCard(c, d, c.t === 'conflict' ? ++n : 0, conf.length, c === firstOpen));
+  }
+  return out;
+}
+function valueView(d) {
+  const baseLines = d.absent.base ? null : new Set(d.base.split('\n'));             // lines a side changed or added stand out
+  const side = (name, cls, label) => {
+    const absent = d.absent[name], cur = d.absent.result === absent && (absent || d.result === d[name]);
+    const btn = name === 'base' ? h('button', { class: 'small', onclick: guard(() => choose({ side: 'base' })), text: absent ? 'Leave it out' : 'Keep the original' })
+      : h('button', { class: 'small ' + cls, onclick: guard(() => choose({ side: name })) }, absent ? 'Leave it out' : 'Use ' + name, name === 'ours' ? h('kbd', { text: '1' }) : h('kbd', { text: '2' }));
+    return h('div', { class: 'card' + (cur ? ' current' : '') }, h('div', { class: 'head' }, h('span', { class: 'tag ' + cls, text: label }), cur ? h('span', { class: 'badge', text: 'IN THE RESULT' }) : null, h('div', { class: 'btns' }, btn)),
+      absent ? h('div', { class: 'val absent', text: d.kind === 'element' ? 'not there on this side' : 'not set on this side' })
+        : h('div', { class: 'val code' }, d[name].split('\n').map(l => line(l, name !== 'base' && baseLines && !baseLines.has(l) ? 'add' : ''))));
+  };
+  const out = [h('div', { class: 'three' }, side('ours', 'ours', 'OURS · ' + S.doc.labels.ours), side('theirs', 'theirs', 'THEIRS · ' + S.doc.labels.theirs), side('base', 'base', 'ORIGINAL'))];
+  if (S.edit && S.edit.whole) {
+    const ta = h('textarea', { 'aria-label': 'Your own value', spellcheck: 'false' }); ta.value = S.edit.text;
+    out.push(h('div', { class: 'card' }, h('div', { class: 'head' }, h('span', { class: 'what', text: d.isString ? 'Your own text' : 'Your own value, as JSON' })), ta,
+      h('div', { class: 'editbar' }, h('button', { class: 'primary', onclick: guard(() => choose({ value: d.isString ? ta.value : JSON.parse(ta.value) })), text: 'Use this' }), h('button', { onclick: () => { S.edit = null; renderMain(); }, text: 'Cancel' }))));
+  }
+  return out;
+}
+function renderMain(resetScroll) {
+  const main = $('main'), d = S.det, top = main.scrollTop;
+  if (!d) { main.replaceChildren(h('div', { class: 'empty', text: S.doc && S.doc.entries.length ? 'Pick something on the left.' : 'The two sides do not differ in anything that matters.' })); return; }
+  const startEdit = guard(async () => { if (d.kind === 'text') { const f = await api('/api/entry?i=' + S.i + '&full=1&key=' + encodeURIComponent(d.key)); S.edit = { whole: true, text: f.text }; } else S.edit = { whole: true, text: d.editText }; renderMain(); });
+  const acts = [];
+  if (d.kind === 'text') acts.push(h('button', { class: 'ours', onclick: guard(() => choose({ side: 'ours' })), title: 'Take OURS for every block here', text: 'All ours' }), h('button', { class: 'theirs', onclick: guard(() => choose({ side: 'theirs' })), title: 'Take THEIRS for every block here', text: 'All theirs' }));
+  acts.push(h('button', { onclick: startEdit, text: d.kind === 'text' ? 'Edit whole result' : 'Write my own' }));
+  if (d.choice) acts.push(h('button', { onclick: guard(() => choose({ reset: true })) }, 'Start over', h('kbd', { text: 'u' })));
+  put(main,
+    h('div', { class: 'crumb', text: d.group }),
+    h('div', { class: 'title' }, h('h1', { text: d.field }), h('span', { class: 'pill ' + (d.status === 'conflict' ? 'open' : d.status === 'resolved' ? 'done' : 'info'), text: STATUS[d.status] }), h('span', { class: 'crumb', text: d.hint }), h('div', { class: 'actions' }, acts)),
+    d.problem ? h('div', { class: 'banner', text: d.problem + '. Pick a side or edit the result.' }) : null,
+    d.kind === 'text' ? h('div', { class: 'doc' }, textView(d)) : valueView(d));
+  main.scrollTop = resetScroll ? 0 : top;
+  if (resetScroll) { const open = main.querySelector('[data-open]'); if (open) open.scrollIntoView({ block: 'center' }); }
+}
+
+/* ---------- keys ---------- */
+document.addEventListener('keydown', guard(async ev => {
+  if (/^(TEXTAREA|INPUT|SELECT)$/.test(ev.target.tagName)) { if (ev.key === 'Escape') ev.target.blur(); return; }
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 's') { ev.preventDefault(); if (!S.doc.preview) await save(false); return; }
+  if (ev.metaKey || ev.ctrlKey || ev.altKey || !S.doc) return;
+  const rows = visible(), at = rows.findIndex(e => e.key === S.key), d = S.det;
+  if (ev.key === 'j' || ev.key === 'ArrowDown') { ev.preventDefault(); if (rows[at + 1]) await select(rows[at + 1].key); }
+  else if (ev.key === 'k' || ev.key === 'ArrowUp') { ev.preventDefault(); if (rows[at - 1]) await select(rows[at - 1].key); }
+  else if (ev.key === 'n') { const nx = nextConflictKey(); if (nx) await select(nx); else toast('No other open conflict in this file.'); }
+  else if (ev.key === 'u' && d && d.choice) await choose({ reset: true });
+  else if (d && ['1', '2', '3'].includes(ev.key)) {
+    const pick = { 1: 'ours', 2: 'theirs', 3: 'ours+theirs' }[ev.key];
+    if (d.kind === 'text') { const c = d.chunks.find(x => x.t === 'conflict' && x.pick == null); if (c) await choose({ hunk: c.i, pick }); }
+    else if (ev.key !== '3') await choose({ side: pick });
+  }
+}));
+$('search').addEventListener('input', e => { S.q = e.target.value.trim().toLowerCase(); renderList(); });
+guard(async () => { S.docs = await api('/api/docs'); const first = S.docs.find(d => d.open) || S.docs[0]; await loadDoc(first.i); })();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "pm-alt-editor",
+  "version": "2.0.0",
+  "private": true,
+  "description": "treemerge: interactive structural 3-way merge for JSON and text. pmx: fix Postman collection tests without hand-editing the JSON.",
+  "bin": { "treemerge": "treemerge.js", "pmx": "pmx.js" },
+  "scripts": { "test": "node test/selftest.js && node test/treemerge.test.js" },
+  "devDependencies": { "newman": "^6.2.1" }
+}

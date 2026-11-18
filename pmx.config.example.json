@@ -1,0 +1,10 @@
+{
+  "collection": "path/to/Your.postman_collection.json",
+  "newman": {
+    "environment": "path/to/your.postman_environment.json",
+    "insecure": true,
+    "timeoutRequest": 30000,
+    "envVar": [{ "key": "token", "value": "${API_TOKEN}" }]
+  },
+  "alwaysRun": ["Login", "Setup"]
+}
