@@ -149,7 +149,7 @@ table.diff tr.gap td { text-align: center; color: var(--muted); background: var(
     <div class="list" id="tree" role="tree" aria-label="Folders and requests"></div>
     <div class="foot"><div id="foot"></div><div id="saved" role="status"></div></div>
   </aside>
-  <main id="main"></main>
+  <main><div id="banners"></div><div id="main"></div></main>
 </div>
 <div id="notes"></div>
 <script nonce="__NONCE__">
@@ -172,7 +172,7 @@ function h(tag, props, ...kids) {
   return add(el, kids);
 }
 function add(el, ...kids) { for (const kid of kids.flat(4)) if (kid != null && kid !== false) el.append(kid); return el; }   // strings become text nodes
-const S = { st: null, pending: null, sel: 'collection.js', node: null, nodeError: '', tab: 'main', view: 'node', diffMode: 'unified', open: null, filter: '', onlyChanged: false, adding: null, focus: null, query: '', running: false, token: 0, leave: null, rawDirty: false };
+const S = { st: null, pending: null, sel: 'collection.js', node: null, nodeError: '', tab: 'main', view: 'node', diffMode: 'unified', open: null, filter: '', onlyChanged: false, adding: null, focus: null, query: '', running: false, token: 0, leave: null, rawDirty: false, bodies: new Map() };
 try { if (localStorage.getItem('pmx-tree-diff') === 'split') S.diffMode = 'split'; } catch (e) { /* no storage: fine */ }
 
 /* ---------- talking to pmx ---------- */
@@ -180,7 +180,7 @@ async function api(method, url, body) {
   const res = await fetch(url, { method, headers: { 'x-pmx-key': KEY, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
   let data;
   try { data = await res.json(); } catch (e) { data = { error: 'pmx gave an answer that is not JSON' }; }
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { stale: !!data.stale });
   return data;
 }
 const get = (url, q) => api('GET', url + (q ? '?' + new URLSearchParams(q) : ''));
@@ -230,7 +230,7 @@ async function refresh() {
   if (!st) return;
   S.st = st;
   if (!S.open) { let count = 0; (function c(n) { count++; n.children.forEach(c); })(st.root); S.open = new Set(); (function o(n, depth) { if (n.kind !== 'request' && (count <= 150 || depth < 1)) S.open.add(n.id); n.children.forEach(x => o(x, depth + 1)); })(st.root, 0); }
-  renderHeader(); renderTree(); renderNodeHead();
+  renderHeader(); renderTree(); renderNodeHead(); renderBanners();
   get('/api/pending').then(p => { S.pending = p; renderHeader(); }).catch(() => {});
 }
 async function loadNode() {
@@ -245,8 +245,8 @@ async function select(id, opt) {
   if (S.node && S.tab === 'inherited' && S.node.kind === 'collection') S.tab = 'main';
   renderHeader(); renderTree(); renderMain();
 }
-async function reloadAll() { await refresh(); if (S.st && !findIn(S.st.root, S.sel)) S.sel = 'collection.js'; await loadNode(); renderTree(); renderMain(); }
-async function show(view) { if (!(await ready())) return; S.view = view; renderHeader(); renderTree(); renderMain(); }
+async function reloadAll() { await flush(); await refresh(); if (S.st && !findIn(S.st.root, S.sel)) S.sel = 'collection.js'; await loadNode(); renderTree(); renderMain(); }
+async function show(view) { if (!(await ready())) return; S.view = view; if (view === 'node') await loadNode(); renderHeader(); renderTree(); renderMain(); }
 
 /* ---------- header ---------- */
 function renderHeader() {
@@ -291,9 +291,14 @@ function renderTreebar() {
   bar.textContent = '';
   if (S.adding) {
     const input = h('input', { type: 'text', placeholder: `Name of the new ${S.adding}`, 'aria-label': `Name of the new ${S.adding}`, onkeydown: e => { if (e.key === 'Enter') add(); if (e.key === 'Escape') { S.adding = null; renderTreebar(); } } });
+    let adding = false;
     const add = async () => {
       const name = input.value.trim();
-      if (!name) return;
+      if (!name || adding) return;
+      adding = true;
+      try { await addNow(name); } finally { adding = false; }
+    };
+    const addNow = async name => {
       const hit = S.st && findIn(S.st.root, S.sel), parent = !hit ? 'collection.js' : hit.node.kind === 'request' ? hit.parent.id : hit.node.id, kind = S.adding;
       if (!(await ready())) return;
       const r = await guard(() => post('/api/add', { parent, kind, name }));
@@ -376,13 +381,14 @@ function kv(opt) {
       const tr = h('tr', { class: row.disabled ? 'off' : '' },
         h('td', { class: 'chk' }, on),
         h('td', {}, textInput(row.key, v => { row.key = v; opt.changed(); }, { class: 'mono', 'aria-label': opt.keyLabel || 'Key' })),
-        h('td', {}, textInput(row.value == null ? '' : typeof row.value === 'string' ? row.value : JSON.stringify(row.value), v => { row.value = v; opt.changed(); }, { class: 'mono', 'aria-label': opt.valueLabel || 'Value' })),
+        h('td', {}, row.type === 'file' ? h('span', { class: 'hint' }, 'a file: ' + JSON.stringify(row.src == null ? '' : row.src) + '   (change it in the Raw tab)')
+          : textInput(row.value == null ? '' : typeof row.value === 'string' ? row.value : JSON.stringify(row.value), v => { row.value = v; opt.changed(); }, { class: 'mono', 'aria-label': opt.valueLabel || 'Value' })),
         h('td', { class: 'del' }, h('button', { class: 'small', title: 'Remove this row', 'aria-label': 'Remove this row', onclick: () => { list.splice(i, 1); if (!list.length && opt.empty) opt.empty(); opt.changed(); draw(); } }, '×')));
       table.append(tr);
     });
     box.append(table, h('button', { class: 'small', onclick: () => {
-      const target = opt.list() || opt.create(), like = target.find(isObj), row = { key: '', value: '' };
-      if (like ? typeof like.type === 'string' : opt.type) row.type = like ? like.type : opt.type;
+      const target = opt.list() || opt.create(), row = { key: '', value: '' };
+      if (opt.type) row.type = opt.type; else if (opt.typeIfTyped && target.some(x => isObj(x) && typeof x.type === 'string')) row.type = opt.typeIfTyped;
       target.push(row); opt.changed(); draw();
       const inputs = box.querySelectorAll('tr:last-child input.mono'); if (inputs[0]) inputs[0].focus();
     } }, '+ Add ' + (opt.what || 'row')));
@@ -476,11 +482,24 @@ function fileDiff(f, extra) {
 }
 
 /* ---------- the editor for one request, folder or the collection ---------- */
+/* What is wrong with the files, above whatever is shown. Drawn on its own, so that it can change without the form being drawn again. */
+function renderBanners() {
+  const box = $('banners'), st = S.st;
+  if (!st) return;
+  const key = JSON.stringify([st.problems, st.unlisted]);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.textContent = '';
+  if (st.problems.length) box.append(h('div', { class: 'banner bad', role: 'alert' }, `${st.problems.length} problem${st.problems.length > 1 ? 's' : ''} in the files:\n` + st.problems.slice(0, 8).join('\n')));
+  const n = st.unlisted.length;
+  if (n) box.append(h('div', { class: 'banner warn' }, `${n} file${n > 1 ? 's' : ''} in ${st.tree}/ ${n > 1 ? 'are' : 'is'} not part of the collection, because no definition lists ${n > 1 ? 'them' : 'it'}:\n` + st.unlisted.slice(0, 8).join('\n') + (n > 8 ? '\n…' : '')
+    + '\nA script belongs in the "event" of its request (Raw tab), a request in the "$children" of its folder.'));
+}
 function renderMain() {
   const main = $('main');
   S.token++;
   main.textContent = '';
-  if (S.st && S.st.problems.length) main.append(h('div', { class: 'banner bad', role: 'alert' }, `${S.st.problems.length} problem${S.st.problems.length > 1 ? 's' : ''} in the files:\n` + S.st.problems.slice(0, 8).join('\n')));
+  renderBanners();
   if (S.view === 'changes') return viewChanges(main);
   if (S.view === 'preview') return viewPreview(main);
   if (S.view === 'run') return viewRun(main);
@@ -495,7 +514,8 @@ function renderNodeHead() {
   const hit = findIn(S.st.root, n.id), live = hit ? hit.node : { name: n.name, path: n.path, status: n.status, scripts: [] }, changed = isChanged(live);
   const act = async (url, body, then) => { if (!(await ready())) return; const r = await guard(() => post(url, body)); if (r === undefined) return; if (then) await then(r); else await reloadAll(); };
   const remove = h('button', { class: 'small danger', onclick: async () => {
-    if (remove.dataset.sure !== '1') { remove.dataset.sure = '1'; remove.textContent = 'Really remove?'; setTimeout(() => { remove.dataset.sure = ''; remove.textContent = 'Remove'; }, 3500); return; }
+    if (remove.dataset.sure !== '1') { remove.dataset.sure = '1'; remove.dataset.at = String(Date.now()); remove.textContent = 'Really remove?'; setTimeout(() => { remove.dataset.sure = ''; remove.textContent = 'Remove'; }, 4000); return; }
+    if (Date.now() - Number(remove.dataset.at) < 600) return;       // the second half of a double click is not an answer
     const parent = hit && hit.parent ? hit.parent.id : 'collection.js';
     await act('/api/remove', { id: n.id }, async () => { S.sel = parent; S.tab = 'main'; await reloadAll(); });
   } }, 'Remove');
@@ -507,7 +527,7 @@ function renderNodeHead() {
     n.kind === 'request' ? h('button', { class: 'small', onclick: () => act('/api/duplicate', { id: n.id }, async r => { await refresh(); await select(r.id, { tab: 'main' }); }) }, 'Duplicate') : null,
     n.kind !== 'collection' ? h('button', { class: 'small', title: 'Move up', 'aria-label': 'Move up', onclick: () => act('/api/move', { id: n.id, by: -1 }) }, '↑') : null,
     n.kind !== 'collection' ? h('button', { class: 'small', title: 'Move down', 'aria-label': 'Move down', onclick: () => act('/api/move', { id: n.id, by: 1 }) }, '↓') : null,
-    changed && n.originalDef ? h('button', { class: 'small', title: 'Put this back to what it was when the collection was unpacked', onclick: async () => { if (!(await ready())) return; for (const id of [n.id, ...n.scripts.filter(s => s.original != null).map(s => s.file)]) if ((await guard(() => post('/api/revert', { id }))) === undefined) break; await reloadAll(); } }, 'Revert') : null,
+    changed && n.originalDef ? h('button', { class: 'small', title: n.kind === 'request' ? 'Put this request and its scripts back to what they were when the collection was unpacked' : 'Put the own fields and scripts of this ' + (n.kind === 'folder' ? 'folder' : 'collection') + ' back. What is in it stays as it is now', onclick: async () => { if (!(await ready())) return; for (const id of [n.id, ...n.scripts.filter(s => s.original != null).map(s => s.file)]) if ((await guard(() => post('/api/revert', { id }))) === undefined) break; await reloadAll(); } }, 'Revert') : null,
     n.kind !== 'collection' ? remove : null);
   const labels = [['main', n.kind === 'request' ? 'Request' : n.kind === 'folder' ? 'Folder' : 'Collection', live.status === 'modified'], ['scripts', `Scripts (${live.scripts.length})`, live.scripts.some(s => s.status !== 'same')]]
     .concat(n.kind === 'collection' ? [] : [['inherited', 'Inherited', false]], [['changes', 'Changes', changed], ['raw', 'Raw', false]]);
@@ -526,7 +546,15 @@ function renderTab() {
   else if (n.kind === 'request') tabRequest(body);
   else tabGroup(body);
 }
-const saveDef = () => { const n = S.node; later('def', () => post('/api/def', { id: n.id, def: n.def })); };
+const saveDef = () => { const n = S.node; later('def', () => saved(n, async () => { n.rev = (await post('/api/def', { id: n.id, def: n.def, rev: n.rev })).rev; })); };
+/* Run one save. If pmx refuses it because the file changed underneath, show the file as it is now. */
+async function saved(n, write) {
+  try { await write(); } catch (e) {
+    if (!e.stale) throw e;
+    note(e.message, 'bad');
+    if (S.node === n) { await loadNode(); if (S.view === 'node') renderMain(); }
+  }
+}
 
 /* URLs: Postman stores the text ("raw") and its parts. Editing either keeps the other in step. */
 function parseUrl(raw) {
@@ -552,21 +580,57 @@ function parseUrl(raw) {
   return { protocol, host: host === '' ? undefined : parts, port, path, query, hash };
 }
 const urlText = u => (typeof u === 'string' ? u : isObj(u) && typeof u.raw === 'string' ? u.raw : '');
+const inUrl = s => String(s).replace(/[#&]/g, c => (c === '#' ? '%23' : '%26'));      // written as they are, these two would end the value
+const keyInUrl = s => inUrl(s).replace(/=/g, '%3D');
+const asText = v => (v == null ? null : typeof v === 'string' ? v : JSON.stringify(v));
 function setUrl(req, raw) {
   if (typeof req.url === 'string') { req.url = raw; return; }
   if (!isObj(req.url)) setKey(req, 'url', {}, REQUEST_KEYS);
   const u = req.url, p = parseUrl(raw), put = (key, value) => { if (value === undefined) delete u[key]; else setKey(u, key, value, URL_KEYS); };
   put('raw', raw); put('protocol', p.protocol); put('host', p.host); put('port', p.port); put('path', p.path);
-  const old = Array.isArray(u.query) ? u.query.filter(isObj) : [], on = old.filter(q => !q.disabled), off = old.filter(q => q.disabled);
-  const next = p.query.map((q, k) => Object.assign({}, on[k] && on[k].key === q.key ? on[k] : {}, q)).concat(off);
-  put('query', next.length ? next : undefined); put('hash', p.hash);
+  // A parameter that is still in the URL keeps everything it had (its description, a number as a number); it is
+  // found again by its name, not by its place. Switched-off parameters are not in the URL and stay where they were.
+  const old = Array.isArray(u.query) ? u.query.filter(isObj) : [], waiting = old.filter(q => !q.disabled);
+  const next = p.query.map(q => {
+    const at = waiting.findIndex(o => keyInUrl(String(o.key)) === q.key || String(o.key) === q.key);
+    if (at < 0) return q;
+    const [kept] = waiting.splice(at, 1), had = asText(kept.value);
+    if (!(q.value === had || (had != null && q.value === inUrl(had)))) kept.value = q.value;
+    return kept;
+  });
+  const all = [];
+  let done = 0;
+  for (const o of old) {
+    if (o.disabled) { all.push(o); continue; }
+    const at = next.indexOf(o);
+    while (done <= at) all.push(next[done++]);
+  }
+  while (done < next.length) all.push(next[done++]);
+  put('query', all.length ? all : undefined); put('hash', p.hash);
 }
 function queryToRaw(u) {
-  const raw = typeof u.raw === 'string' ? u.raw : '', hashAt = raw.indexOf('#'), hash = hashAt >= 0 ? raw.slice(hashAt) : '';
-  let base = hashAt >= 0 ? raw.slice(0, hashAt) : raw;
-  if (base.includes('?')) base = base.slice(0, base.indexOf('?'));
-  const on = (u.query || []).filter(q => isObj(q) && !q.disabled).map(q => (q.value == null ? String(q.key) : `${q.key}=${q.value}`));
-  u.raw = base + (on.length ? '?' + on.join('&') : '') + hash;
+  const raw = typeof u.raw === 'string' ? u.raw : '';
+  const end = Math.min(...['?', '#'].map(mark => (raw.includes(mark) ? raw.indexOf(mark) : raw.length)));
+  const on = (u.query || []).filter(q => isObj(q) && !q.disabled).map(q => (q.value == null ? keyInUrl(q.key) : `${keyInUrl(q.key)}=${inUrl(asText(q.value))}`));
+  u.raw = raw.slice(0, end) + (on.length ? '?' + on.join('&') : '') + (typeof u.hash === 'string' && u.hash !== '' ? '#' + u.hash : '');
+}
+/* Lay JSON out again without reading a single value: a long number stays the number that was written. */
+function tidyJson(text) {
+  JSON.parse(text);                                // not JSON: this throws, and the text is left alone
+  const blank = c => c === ' ' || c === '\n' || c === '\r' || c === '\t';
+  let out = '', depth = 0, i = 0;
+  const line = () => '\n' + '  '.repeat(depth);
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"') { let j = i + 1; while (text[j] !== '"') j += text[j] === '\\' ? 2 : 1; out += text.slice(i, j + 1); i = j + 1; }
+    else if (c === '{' || c === '[') { let j = i + 1; while (blank(text[j])) j++; if (text[j] === (c === '{' ? '}' : ']')) { out += c + text[j]; i = j + 1; } else { depth++; out += c + line(); i++; } }
+    else if (c === '}' || c === ']') { depth--; out += line() + c; i++; }
+    else if (c === ',') { out += ',' + line(); i++; }
+    else if (c === ':') { out += ': '; i++; }
+    else if (blank(c)) i++;
+    else { let j = i; while (j < text.length && !blank(text[j]) && !',]}:'.includes(text[j])) j++; out += text.slice(i, j); i = j; }
+  }
+  return out;
 }
 
 function authEditor(holder, order, inheritLabel) {
@@ -630,9 +694,9 @@ function bodyEditor(req) {
     if (!modes.some(m => m[0] === mode)) modes.push([mode, mode]);
     box.textContent = '';
     const line = h('div', { class: 'line' }, dropdown(modes, mode, v => {
-      if (v === 'none') delete req.body;
+      if (v === 'none') { if (isObj(req.body)) S.bodies.set(S.node.id, req.body); delete req.body; }
       else {
-        if (!isObj(req.body)) setKey(req, 'body', {}, REQUEST_KEYS);
+        if (!isObj(req.body)) setKey(req, 'body', S.bodies.get(S.node.id) || {}, REQUEST_KEYS);
         setKey(req.body, 'mode', v, ['mode']);
         if (v === 'raw' && typeof req.body.raw !== 'string') req.body.raw = '';
         if ((v === 'urlencoded' || v === 'formdata') && !Array.isArray(req.body[v])) req.body[v] = [];
@@ -645,7 +709,7 @@ function bodyEditor(req) {
       const lang = isObj(b.options) && isObj(b.options.raw) && typeof b.options.raw.language === 'string' ? b.options.raw.language : '';
       const ed = codeEditor(typeof b.raw === 'string' ? b.raw : '', v => { b.raw = v; saveDef(); }, { label: 'Body', min: 4, max: 24 });
       line.append(dropdown([['', 'language: not set'], 'json', 'text', 'javascript', 'xml', 'html'], lang, v => { if (!v) { if (isObj(b.options) && isObj(b.options.raw)) delete b.options.raw.language; } else { if (!isObj(b.options)) b.options = {}; if (!isObj(b.options.raw)) b.options.raw = {}; b.options.raw.language = v; } saveDef(); }, { 'aria-label': 'Language of the body' }),
-        h('button', { class: 'small', title: 'Lay the JSON out again with 2 spaces', onclick: () => { try { const text = JSON.stringify(JSON.parse(ed.ta.value), null, 2); ed.set(text); b.raw = text; saveDef(); } catch (e) { note('The body is not plain JSON (a {{variable}} outside quotes, perhaps), so it was left as it is.'); } } }, 'Tidy JSON'));
+        h('button', { class: 'small', title: 'Lay the JSON out again with 2 spaces', onclick: () => { try { const text = tidyJson(ed.ta.value); ed.set(text); b.raw = text; saveDef(); } catch (e) { note('The body is not plain JSON (a {{variable}} outside quotes, perhaps), so it was left as it is.'); } } }, 'Tidy JSON'));
       box.append(ed);
     } else if (mode === 'urlencoded' || mode === 'formdata') {
       box.append(kv({ what: 'field', type: 'text', list: () => (Array.isArray(b[mode]) ? b[mode] : null), create: () => { b[mode] = []; return b[mode]; }, changed: saveDef }));
@@ -668,7 +732,7 @@ function tabGroup(body) {
   if (top || Array.isArray(g.variable)) {
     body.append(h('div', { class: 'card' }, h('h3', {}, top ? 'Collection variables' : 'Folder variables'),
       h('div', { class: 'hint' }, 'Use one anywhere as {{name}}. An environment file can give the same name another value.'),
-      kv({ what: 'variable', keyLabel: 'Name', list: () => (Array.isArray(g.variable) ? g.variable : null), create: () => { setKey(g, 'variable', [], top ? TOP_KEYS : NODE_KEYS); return g.variable; }, changed: () => { saveDef(); if (usage) later('usage', () => drawUsage()); } })));
+      kv({ what: 'variable', keyLabel: 'Name', typeIfTyped: 'string', list: () => (Array.isArray(g.variable) ? g.variable : null), create: () => { setKey(g, 'variable', [], top ? TOP_KEYS : NODE_KEYS); return g.variable; }, changed: () => { saveDef(); if (usage) later('usage', () => drawUsage()); } })));
   }
   body.append(h('div', { class: 'card' }, h('h3', {}, 'Auth for everything in this ' + (top ? 'collection' : 'folder')), authEditor(g, top ? TOP_KEYS : NODE_KEYS, top ? 'Not set here' : 'Inherit from the folder above or the collection')));
   body.append(h('div', { class: 'card' }, h('h3', {}, 'Description'), descriptionBox(top ? g.info : g, top ? ['_postman_id', 'name', 'description', 'schema'] : NODE_KEYS)));
@@ -705,7 +769,7 @@ function tabScripts(body) {
       if (dropped) info.className = 'hint warn';
       info.textContent = `Parses. ${r.tests} pm.test call${r.tests === 1 ? '' : 's'}` + (r.testsBefore != null && r.testsBefore !== r.tests ? ` (${r.testsBefore} when unpacked)` : '') + (dropped ? '. Pack refuses to drop tests.' : '.');
     };
-    const ed = codeEditor(s.text, text => { s.text = text; later('script:' + s.file, async () => tell(await post('/api/script', { file: s.file, text: s.text }))); }, { label: `${LISTEN[s.listen] || s.listen} of ${n.name}`, min: 4, max: 34 });
+    const ed = codeEditor(s.text, text => { s.text = text; later('script:' + s.file, () => saved(n, async () => { const r = await post('/api/script', { file: s.file, text: s.text, rev: s.rev }); s.rev = r.rev; tell(r); })); }, { label: `${LISTEN[s.listen] || s.listen} of ${n.name}`, min: 4, max: 34 });
     ed.dataset.file = s.file;
     tell(s);
     const fails = run ? run.assertions.filter(a => a.result === 'FAIL' && a.file === s.file) : [];
@@ -756,7 +820,10 @@ async function tabChanges(body) {
 function tabRaw(body) {
   const n = S.node;
   const write = async () => {                     // true when the text is in the file
-    if ((await guard(() => post('/api/def', { id: n.id, text: ed.ta.value }))) === undefined) return false;
+    try { n.rev = (await post('/api/def', { id: n.id, text: ed.ta.value, rev: n.rev })).rev; } catch (e) {
+      if (e.stale) { const now = await get('/api/node', { id: n.id }).catch(() => null); if (now) n.rev = now.rev; note(e.message.split('. ')[0] + '. Your text is still in the box: press Apply again to write it over the file.', 'bad'); } else note(e.message, 'bad');
+      return false;
+    }
     S.rawDirty = false; button.disabled = true; showSaved();
     return true;
   };
@@ -780,7 +847,7 @@ async function viewChanges(main) {
   for (const c of list) {
     const letter = c.status === 'added' ? 'A' : c.status === 'removed' ? 'D' : 'M';
     main.append(h('div', { class: 'card' }, h('div', { class: 'scripthead' }, h('span', { class: 'badge ' + letter }, c.status), h('h2', {}, c.path.join(' / ') || c.name), h('span', { class: 'hint' }, c.kind), h('span', { class: 'grow' }),
-      c.status === 'removed' ? h('button', { class: 'small', onclick: async () => { if (await guard(() => post('/api/revert', { id: c.id }))) { await refresh(); renderMain(); } } }, 'Put back') : h('button', { class: 'small', onclick: () => select(c.id, { tab: 'main' }) }, 'Open')),
+      c.status === 'removed' ? h('button', { class: 'small', onclick: async () => { if (await guard(() => post('/api/revert', { id: c.id }))) await reloadAll(); } }, 'Put back') : h('button', { class: 'small', onclick: () => select(c.id, { tab: 'main' }) }, 'Open')),
       c.files.map(f => fileDiff(f))));
   }
 }
@@ -835,7 +902,8 @@ async function pack() {
   if (!r) return;
   if (r.errors.length) { note('Pack was refused:\n' + r.errors.join('\n'), 'bad'); S.view = 'preview'; }
   else note(r.held ? `${S.st.collection} had changed and already held every edit. The files were written again from it.` : `Packed into ${S.st.collection}: +${r.added} −${r.removed} lines (${r.how}).` + (r.onto ? '\nThe files were written again from the merged result.' : ''), 'good');
-  await reloadAll(); renderHeader();
+  if (r.onto) await reloadAll(); else { await flush(); await refresh(); if (S.view !== 'node') renderMain(); }
+  renderHeader();
 }
 async function runTests(id) {
   if (S.running) return;
@@ -866,10 +934,13 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('focus', async () => {            // the files may have been edited by hand meanwhile
   if (saves.size || busy || S.running || S.rawDirty || !S.st) return;
+  const picture = n => JSON.stringify([n.def, n.scripts.map(x => x.text)]);
+  const id = S.sel, was = S.node, before = was ? picture(was) : null;
   await refresh();
-  if (S.view !== 'node' || !S.node || saves.size || busy || S.rawDirty) return;
-  const fresh = await get('/api/node', { id: S.sel }).catch(() => null);
-  if (fresh && (JSON.stringify(fresh.def) !== JSON.stringify(S.node.def) || fresh.scripts.some((s, i) => !S.node.scripts[i] || s.text !== S.node.scripts[i].text) || fresh.scripts.length !== S.node.scripts.length)) { S.node = fresh; renderMain(); }
+  if (S.view !== 'node' || !was) return;
+  const now = await get('/api/node', { id }).catch(() => null);
+  if (!now || S.node !== was || S.sel !== id || saves.size || busy || S.rawDirty || picture(was) !== before) return;   // something was typed or chosen meanwhile: leave it
+  if (picture(now) !== before) { S.node = now; renderMain(); }
 });
 window.addEventListener('pagehide', () => { flush(); });
 window.addEventListener('beforeunload', e => { if (S.rawDirty) { e.preventDefault(); e.returnValue = ''; } });

@@ -318,6 +318,26 @@ async function main() {
   r = pmx(d8, 'tree', 'status');
   assert.strictEqual(r.code, 2);
   assert.match(r.out, /nothing is unpacked here yet/);
+  // a checkout that converts line ends (core.autocrlf, the default of Git for Windows): the unpacked version is still found in git
+  const d8c = scratch(), C8c = path.join(d8c, 'Demo.postman_collection.json');
+  makeDemo(d8c);
+  fs.writeFileSync(C8c, read(C8c).replace(/\n/g, '\r\n'));
+  git(d8c, 'init', '-q', '.'); git(d8c, 'config', 'core.autocrlf', 'true');
+  r = pmx(d8c, 'tree', 'unpack', 'Demo.postman_collection.json', '--tree', 'files');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /note: this version of the collection is not committed in git/);
+  git(d8c, 'add', 'Demo.postman_collection.json'); git(d8c, 'commit', '-qm', 'the collection');
+  r = pmx(d8c, 'tree', 'unpack', 'Demo.postman_collection.json', '--tree', 'files');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /is not committed/);
+  editDef(path.join(d8c, 'files', 'Smoke', 'Ping.request.js'), d => { d.name = 'Ping the API'; });
+  assert.strictEqual(pmx(d8c, 'tree', 'pack').code, 0);
+  fs.rmSync(path.join(d8c, '.pmx'), { recursive: true, force: true });
+  r = pmx(d8c, 'tree', 'status');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /M Smoke\/Ping\.request\.js/);
+  assert.match(r.out, /already holds these edits/);
+
   // unpacking never clears a folder that holds something else, never writes outside this folder, and a note that points outside is not followed
   fs.mkdirSync(path.join(d8, 'notes'));
   fs.writeFileSync(path.join(d8, 'notes', 'keep.txt'), 'mine');

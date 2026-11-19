@@ -164,9 +164,113 @@ async function main() {
     await page.locator('#tree .row').nth(3).click();
     await page.waitForSelector('#nodehead button:has-text("Remove")');
     await page.click('#nodehead button:has-text("Remove")');
+    await page.waitForTimeout(700);                 // the second half of a double click does not confirm
     await page.click('#nodehead button:has-text("Really remove?")');
     await settled();
     ok('a name or URL full of HTML is shown as text in the tree, the forms, the diffs and the search');
+
+    // an older copy in the page is never written over newer files
+    await page.click(row('Ping'));
+    await page.click('#nodehead button:has-text("Remove")');
+    await page.waitForTimeout(700);
+    await page.click('#nodehead button:has-text("Really remove?")');
+    await page.waitForSelector('#tree button:has-text("Put back")');           // the page now shows the folder Smoke
+    await page.click('#btnChanges');
+    await page.click('main button:has-text("Put back")');
+    await page.waitForSelector(row('Ping'));
+    await page.click('#btnChanges');                                            // back to the folder
+    await page.waitForSelector('#tabbody input');
+    await page.locator('#tabbody input').first().fill('Smoke checks');
+    await settled();
+    assert.deepStrictEqual(def('Smoke', 'folder.js'), { name: 'Smoke checks', item: { $children: ['Ping.request.js'] } }, 'the folder was saved from an older copy: the request that was put back is gone again');
+    await page.locator('#tabbody input').first().fill('Smoke');
+    await settled();
+    await page.click(row('Ping'));
+    await page.click('#tabs button:has-text("Scripts")');
+    const pingTests = page.locator('#tabbody textarea.code');
+    await page.waitForSelector('#tabbody textarea.code');
+    fs.appendFileSync(T('Smoke', 'Ping.test.js'), '\n// fixed by hand');          // somebody edits the file; the page does not know yet
+    await pingTests.focus();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' ');
+    await page.waitForSelector('.note.bad');
+    assert.match(await page.locator('.note.bad').innerText(), /was changed in the files since the page read it/);
+    assert.match(read(T('Smoke', 'Ping.test.js')), /\/\/ fixed by hand$/, 'the page wrote its older copy over a file edited by hand');
+    await page.waitForFunction(() => document.querySelector('#tabbody textarea.code').value.endsWith('// fixed by hand'));
+    await page.click('.note.bad .x');
+    await page.click('#tabbody button:has-text("Revert script")');
+    await settled();
+    assert.strictEqual(await page.locator('#pillChanges').innerText(), '1 changed');
+    problems.length = 0;                             // the refused save is reported by the browser as a failed request; that one is expected
+    ok('an older copy held by the page is not written over the files: after put back in another view, and after a hand edit');
+
+    // the URL text and the parameter table, for values and parameters that are easy to get wrong
+    await page.click(row('Genres and formats'));
+    await page.click('#tabs button:has-text("Raw")');
+    const rawBox = page.locator('#tabbody textarea.code');
+    const before5 = await rawBox.inputValue();
+    const odd = JSON.parse(before5);
+    odd.request.url = { raw: '{{baseUrl}}/catalogue?genre=poetry&limit=5&flag', host: ['{{baseUrl}}'], path: ['catalogue'], query: [{ key: 'genre', value: 'poetry', description: 'Genre code' }, { key: 'draft', value: '1', disabled: true }, { key: 'limit', value: 5, description: 'How many' }, { key: 'flag', value: null }] };
+    odd.request.body = { mode: 'formdata', formdata: [{ key: 'cover', type: 'file', src: 'cover.png' }] };
+    await rawBox.fill(JSON.stringify(odd, null, 2));
+    await page.click('#tabbody button:has-text("Apply")');
+    await page.waitForSelector('.note.good:has-text("Applied")');
+    await page.click('#tabs button:has-text("Request")');
+    const urlBox = page.locator('input[aria-label="URL"]');
+    await urlBox.fill('{{baseUrl}}/catalogue2?page=1&genre=poetry&limit=5&flag');           // the path changes and a parameter is typed in front
+    await settled();
+    assert.deepStrictEqual(def('Catalogue', 'Genres_and_formats.request.js').request.url.query, [{ key: 'page', value: '1' }, { key: 'genre', value: 'poetry', description: 'Genre code' }, { key: 'draft', value: '1', disabled: true }, { key: 'limit', value: 5, description: 'How many' }, { key: 'flag', value: null }],
+      'editing the URL text dropped a description, moved a switched-off parameter or turned a number into text');
+    await page.click('button:has-text("+ Add query parameter")');
+    const q5 = page.locator('.card:has(h3:text-is("Query parameters")) table input.mono');
+    const last = (await q5.count()) - 2;
+    await q5.nth(last).fill('colour');
+    await q5.nth(last + 1).fill('#ffcc00 & more');
+    assert.strictEqual(await urlBox.inputValue(), '{{baseUrl}}/catalogue2?page=1&genre=poetry&limit=5&flag&colour=%23ffcc00 %26 more');
+    await urlBox.fill((await urlBox.inputValue()).replace('catalogue2', 'catalogue'));
+    await settled();
+    const url5 = def('Catalogue', 'Genres_and_formats.request.js').request.url;
+    assert.deepStrictEqual([url5.query[url5.query.length - 1], url5.hash, url5.path], [{ key: 'colour', value: '#ffcc00 & more' }, undefined, ['catalogue']], 'a value with # or & was cut up by the next edit of the URL');
+    await page.click('button:has-text("+ Add field")');                                      // a new row is a text row, whatever the row above is
+    const f5 = page.locator('.card:has(h3:text-is("Body")) table input.mono');
+    await f5.nth(1).fill('title');
+    await f5.nth(2).fill('Odes');
+    await settled();
+    assert.deepStrictEqual(def('Catalogue', 'Genres_and_formats.request.js').request.body.formdata, [{ key: 'cover', type: 'file', src: 'cover.png' }, { key: 'title', value: 'Odes', type: 'text' }]);
+    await page.selectOption('select[aria-label="Kind of body"]', 'raw');
+    await page.locator('textarea[aria-label="Body"]').fill('{"book":9781234567890123456,"price":12.50,"tags":[],"a":{"b":"x, y: {z}"}}');
+    await page.click('button:has-text("Tidy JSON")');
+    assert.strictEqual(await page.locator('textarea[aria-label="Body"]').inputValue(), '{\n  "book": 9781234567890123456,\n  "price": 12.50,\n  "tags": [],\n  "a": {\n    "b": "x, y: {z}"\n  }\n}');
+    await page.selectOption('select[aria-label="Kind of body"]', 'none');
+    await settled();
+    assert.strictEqual(def('Catalogue', 'Genres_and_formats.request.js').request.body, undefined);
+    await page.selectOption('select[aria-label="Kind of body"]', 'raw');
+    assert.match(await page.locator('textarea[aria-label="Body"]').inputValue(), /9781234567890123456/, 'choosing "none" and coming back lost the body');
+    await page.click('#nodehead button:has-text("Revert")');
+    await settled();
+    assert.strictEqual(await page.locator('#pillChanges').innerText(), '1 changed');
+    ok('URL and parameters: descriptions, order and numbers survive an edit of the URL; # and & in a value survive; a new row is a text row; Tidy JSON keeps numbers; "none" does not lose the body');
+
+    // a double click adds once; a file that nothing lists is pointed out
+    await page.click(row('Smoke'));
+    await page.click('#treebar button:has-text("+ Request")');
+    await page.fill('#treebar input[type=text]', 'Twice');
+    await page.dblclick('#treebar button:has-text("Add")');
+    await page.waitForSelector(row('Twice'));
+    await settled();
+    assert.strictEqual(await page.locator(row('Twice')).count(), 1, 'a double click on Add made two requests');
+    await page.click('#nodehead button:has-text("Remove")');
+    await page.waitForTimeout(700);
+    await page.click('#nodehead button:has-text("Really remove?")');
+    await settled();
+    fs.writeFileSync(T('Smoke', 'Ping.prerequest.js'), '// written by hand, listed nowhere');
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await page.waitForSelector('main .banner.warn');
+    assert.match(await page.locator('main .banner.warn').innerText(), /1 file in \.pmx\/Demo\/tree\/ is not part of the collection[^]*Smoke\/Ping\.prerequest\.js/);
+    fs.rmSync(T('Smoke', 'Ping.prerequest.js'));
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await page.waitForSelector('main .banner.warn', { state: 'detached' });
+    ok('a double click on Add adds one request; a file that no definition lists is pointed out');
 
     // variables, new requests, order, put back
     await page.click(row('Demo'));
@@ -190,6 +294,7 @@ async function main() {
     await settled();
     await page.click(row('Picks by genre'));
     await page.click('#nodehead button:has-text("Remove")');
+    await page.waitForTimeout(700);                 // the second half of a double click does not confirm
     await page.click('#nodehead button:has-text("Really remove?")');
     await page.waitForSelector('#tree button:has-text("Put back")');
     await page.click('#tree button:has-text("Put back")');
