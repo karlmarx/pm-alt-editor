@@ -324,6 +324,86 @@ async function main() {
     await page.waitForSelector('main .banner.warn', { state: 'detached' });
     ok('a double click on Add adds one request, a double click on Remove only asks; a file that no definition lists is pointed out');
 
+    // what a second review found in the page
+    await page.click(row('Ping'));                                                           // Pack with text in the Raw tab writes it, and the tab goes on writing afterwards
+    await page.click('#tabs button:has-text("Raw")');
+    const raw12 = page.locator('#tabbody textarea.code');
+    const rawPing = await raw12.inputValue();
+    await raw12.fill(rawPing.replace('"name": "Ping"', '"name": "Ping one"'));
+    await page.click('#btnPack');
+    await page.waitForSelector('.note.good:has-text("Packed into")');
+    assert.strictEqual(def('Smoke', 'Ping.request.js').name, 'Ping one', 'Pack did not write the text of the Raw tab first');
+    await page.click('.note.good:has-text("Packed into") .x');
+    await raw12.fill(rawPing.replace('"name": "Ping"', '"name": "Ping two"'));
+    await page.click('#tabs button:has-text("Request")');
+    await page.waitForSelector(row('Ping two'));
+    assert.strictEqual(def('Smoke', 'Ping.request.js').name, 'Ping two', 'after Pack, text typed in the Raw tab was dropped on leaving it');
+    await page.click('#tabs button:has-text("Raw")');
+    await raw12.fill(rawPing);
+    await page.click('#tabbody button:has-text("Apply")');
+    await page.waitForSelector(row('Ping'));
+    await settled();
+
+    await page.click(row('Genres and formats'));                                             // a parameter typed in front of the others, key by key
+    await page.click('#tabs button:has-text("Raw")');
+    const typed = JSON.parse(await raw12.inputValue());
+    typed.request.url = { raw: '{{baseUrl}}/catalogue?genre=poetry&limit=5', host: ['{{baseUrl}}'], path: ['catalogue'], query: [{ key: 'genre', value: 'poetry', description: 'Genre code' }, { key: 'limit', value: 5, description: 'How many' }] };
+    await raw12.fill(JSON.stringify(typed, null, 2));
+    await page.click('#tabbody button:has-text("Apply")');
+    await page.waitForSelector('.note.good:has-text("Applied")');
+    await page.click('#tabs button:has-text("Request")');
+    const url12 = page.locator('input[aria-label="URL"]');
+    await url12.focus();
+    await url12.evaluate(el => { const at = el.value.indexOf('?') + 1; el.setSelectionRange(at, at); });
+    await page.keyboard.type('page=1&', { delay: 15 });
+    await settled();
+    assert.strictEqual(await url12.inputValue(), '{{baseUrl}}/catalogue?page=1&genre=poetry&limit=5');
+    assert.deepStrictEqual(def('Catalogue', 'Genres_and_formats.request.js').request.url.query, [{ key: 'page', value: '1' }, { key: 'genre', value: 'poetry', description: 'Genre code' }, { key: 'limit', value: 5, description: 'How many' }],
+      'typing a parameter in front of the others, key by key, cost them their descriptions');
+    const laidOut = read(T('Catalogue', 'Genres_and_formats.request.js'));                   // the file is laid out again by an editor: the next edit in the page is still taken
+    fs.writeFileSync(T('Catalogue', 'Genres_and_formats.request.js'), laidOut.slice(0, laidOut.indexOf('module.exports = ') + 17) + JSON.stringify(def('Catalogue', 'Genres_and_formats.request.js'), null, 4) + ';\n');
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await page.waitForTimeout(400);
+    await url12.fill('{{baseUrl}}/catalogue?page=2&genre=poetry&limit=5');
+    await settled();
+    assert.deepStrictEqual([def('Catalogue', 'Genres_and_formats.request.js').request.url.query[0], await page.locator('.note.bad').count()], [{ key: 'page', value: '2' }, 0], 'an edit was refused although the file only had another layout');
+    await page.click('#nodehead button:has-text("Revert")');
+    await settled();
+    assert.strictEqual(await page.locator('#pillChanges').innerText(), '1 changed');
+
+    await page.click(row('Ping'));                                                           // a double click on Duplicate makes one copy
+    await page.dblclick('#nodehead button:has-text("Duplicate")');
+    await page.waitForSelector(row('Ping copy'));
+    await settled();
+    assert.deepStrictEqual((await page.locator('#tree .row .name').allInnerTexts()).filter(n => n.startsWith('Ping')), ['Ping', 'Ping copy'], 'a double click on Duplicate made two copies');
+    await page.click('#nodehead button:has-text("Remove")');
+    await page.waitForTimeout(700);
+    await page.click('#nodehead button:has-text("Really remove?")');
+    await settled();
+
+    await page.click(row('Picks by genre'));                                                 // a request and then its folder are removed: putting the request back says where it went
+    await page.click('#nodehead button:has-text("Remove")');
+    await page.waitForTimeout(700);
+    await page.click('#nodehead button:has-text("Really remove?")');
+    await settled();
+    await page.click(row('Staff picks'));
+    await page.click('#nodehead button:has-text("Remove")');
+    await page.waitForTimeout(700);
+    await page.click('#nodehead button:has-text("Really remove?")');
+    await settled();
+    await page.click('#btnChanges');
+    await page.waitForSelector('main .card');
+    await page.click('main .card:has(h2:has-text("Picks by genre")) button:has-text("Put back")');
+    await page.waitForSelector('.note:has-text("that folder was removed too")');
+    await page.click('.note:has-text("that folder was removed too") .x');
+    const live = name => row(name) + ':not(:has(.badge.D))';                                 // (the list of removed things under the tree has rows too)
+    assert.strictEqual(await page.locator(live('Picks by genre')).count(), 0);
+    await page.click('main .card:has(h2:has-text("Staff picks")) button:has-text("Put back")');
+    await page.waitForSelector(live('Picks by genre'));
+    await settled();
+    assert.deepStrictEqual([await page.locator('#tree .row .name').allInnerTexts(), await page.locator('#pillChanges').innerText()], [['Demo', 'Smoke', 'Ping', 'Catalogue', 'Genres and formats', 'Staff picks', 'Picks by genre', 'Orders', 'Open orders'], '1 changed']);
+    ok('a second review: the Raw tab goes on writing after Pack; a parameter typed in front key by key keeps the others whole; a file laid out again does not refuse the next edit; Duplicate copies once; a request put back into a removed folder says so');
+
     // variables, new requests, order, put back
     await page.click(row('Demo'));
     await page.click('button:has-text("+ Add variable")');
