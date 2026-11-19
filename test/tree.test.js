@@ -590,7 +590,9 @@ async function main() {
     assert.deepStrictEqual(st.removed.map(x => x.id).sort(), ['Catalogue/Staff_picks/Picks_by_genre.request.js', 'Catalogue/Staff_picks/folder.js']);
     const ping10 = await get('/api/node?id=' + encodeURIComponent('Smoke/Ping.request.js'));
     ping10.def.request.header.push({ key: 'X-Edited', value: 'before removing', type: 'text' });
+    ping10.def.request.description = 'Answers "ok": true when the API is up';
     let rev10 = (await post('/api/def', { id: 'Smoke/Ping.request.js', def: ping10.def, rev: ping10.rev })).rev;
+    assert.deepStrictEqual((await get('/api/search?q=' + encodeURIComponent('answers "ok": true'))).map(x => x.name), ['Ping'], 'text with quotes inside a definition is not found');
     a = await call('POST', '/api/def', { id: 'Smoke/Ping.request.js', def: ping10.originalDef, rev: ping10.rev });   // an older copy of the page, saved late
     assert.strictEqual(a.code, 409, a.text);
     assert.match(a.json.error, /was changed in the files since the page read it/);
@@ -712,6 +714,24 @@ async function main() {
     a = await post('/api/pack');
     assert.deepStrictEqual(a.errors, [], 'a pack from the terminal was taken for a foreign change');
     assert.ok(read(C10).includes('reserved') && !read(C10).includes('backorder'));
+    // the collection changes underneath while the page is open: Pack merges, and the page goes on from the merged collection
+    fs.writeFileSync(C10, read(C10).replace('"name": "Genres and formats"', '"name": "Genres and formats (renamed upstream)"'));
+    own = await get('/api/node?id=' + encodeURIComponent(orders));
+    await post('/api/script', { file: ordersTest, text: own.scripts[1].text.replace('"reserved"', '"on hold"'), rev: own.scripts[1].rev });
+    pending = await get('/api/pending');
+    assert.deepStrictEqual([pending.errors, pending.onto, pending.held], [[], true, false]);
+    a = await post('/api/pack');
+    assert.deepStrictEqual([a.errors, a.onto], [[], true]);
+    assert.ok(read(C10).includes('on hold') && read(C10).includes('Genres and formats (renamed upstream)'));
+    st = await get('/api/state');
+    assert.deepStrictEqual([st.counts, st.problems, st.root.children[1].children[0].name], [{ modified: 0, added: 0, removed: 0 }, [], 'Genres and formats (renamed upstream)']);
+    pending = await get('/api/pending');
+    assert.deepStrictEqual([pending.errors, pending.packed, pending.added, pending.removed], [[], true, 0, 0], 'after a merge the page does not count from the merged collection');
+    own = await get('/api/node?id=' + encodeURIComponent(orders));
+    await post('/api/script', { file: ordersTest, text: own.scripts[1].text.replace('"on hold"', '"held"'), rev: own.scripts[1].rev });
+    assert.deepStrictEqual((await get('/api/changes')).map(c => [c.id, c.status]), [[orders, 'modified']]);
+    a = await post('/api/pack');
+    assert.deepStrictEqual([a.errors, a.onto, a.added, a.removed], [[], false, 1, 1]);
     await post('/api/close');
     const exit = await new Promise(resolve => { if (ui.exitCode != null) resolve(ui.exitCode); else ui.on('exit', resolve); setTimeout(() => resolve('still running'), 5000); });
     assert.strictEqual(exit, 0, 'tree ui did not stop when the page closed it');

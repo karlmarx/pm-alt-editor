@@ -200,8 +200,21 @@ async function main() {
     await page.click('.note.bad .x');
     await page.click('#tabbody button:has-text("Revert script")');
     await settled();
+    await page.click('#tabs button:has-text("Request")');                      // the same for a definition: the form is open, the file changes
+    const pingFile = T('Smoke', 'Ping.request.js');
+    fs.writeFileSync(pingFile, read(pingFile).replace('"name": "Ping"', '"name": "Ping (by hand)"'));
+    await page.locator('input[aria-label="URL"]').focus();
+    await page.keyboard.press('End');
+    await page.keyboard.type('x');
+    await page.waitForSelector('.note.bad');
+    assert.match(read(pingFile), /"name": "Ping \(by hand\)"/, 'the form wrote its older copy over a definition edited by hand');
+    assert.ok(!read(pingFile).includes('/healthx'));
+    await page.waitForFunction(() => document.querySelector('#tabbody input').value === 'Ping (by hand)');
+    await page.click('.note.bad .x');
+    await page.click('#nodehead button:has-text("Revert")');
+    await settled();
     assert.strictEqual(await page.locator('#pillChanges').innerText(), '1 changed');
-    problems.length = 0;                             // the refused save is reported by the browser as a failed request; that one is expected
+    problems.length = 0;                             // the refused saves are reported by the browser as failed requests; those are expected
     ok('an older copy held by the page is not written over the files: after put back in another view, and after a hand edit');
 
     // the URL text and the parameter table, for values and parameters that are easy to get wrong
@@ -221,12 +234,15 @@ async function main() {
     await settled();
     assert.deepStrictEqual(def('Catalogue', 'Genres_and_formats.request.js').request.url.query, [{ key: 'page', value: '1' }, { key: 'genre', value: 'poetry', description: 'Genre code' }, { key: 'draft', value: '1', disabled: true }, { key: 'limit', value: 5, description: 'How many' }, { key: 'flag', value: null }],
       'editing the URL text dropped a description, moved a switched-off parameter or turned a number into text');
+    await urlBox.fill('{{baseUrl}}/catalogue2?page=1&limit=5&genre=poetry&flag');           // two parameters change places: each keeps what it had
+    await settled();
+    assert.deepStrictEqual(def('Catalogue', 'Genres_and_formats.request.js').request.url.query, [{ key: 'page', value: '1' }, { key: 'limit', value: 5, description: 'How many' }, { key: 'genre', value: 'poetry', description: 'Genre code' }, { key: 'draft', value: '1', disabled: true }, { key: 'flag', value: null }]);
     await page.click('button:has-text("+ Add query parameter")');
     const q5 = page.locator('.card:has(h3:text-is("Query parameters")) table input.mono');
     const last = (await q5.count()) - 2;
     await q5.nth(last).fill('colour');
     await q5.nth(last + 1).fill('#ffcc00 & more');
-    assert.strictEqual(await urlBox.inputValue(), '{{baseUrl}}/catalogue2?page=1&genre=poetry&limit=5&flag&colour=%23ffcc00 %26 more');
+    assert.strictEqual(await urlBox.inputValue(), '{{baseUrl}}/catalogue2?page=1&limit=5&genre=poetry&flag&colour=%23ffcc00 %26 more');
     await urlBox.fill((await urlBox.inputValue()).replace('catalogue2', 'catalogue'));
     await settled();
     const url5 = def('Catalogue', 'Genres_and_formats.request.js').request.url;
