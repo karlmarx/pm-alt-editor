@@ -115,6 +115,32 @@ async function main() {
     await settled();
     ok('the request form: headers, query and URL stay in step, body and auth are written in Postman\'s shape and key order, Revert undoes it all');
 
+    // the Raw tab: text is written on Apply, and also when you leave the tab; text that is not valid JSON keeps you there
+    await page.click(row('Ping'));
+    await page.click('#tabs button:has-text("Raw")');
+    const raw = page.locator('#tabbody textarea.code');
+    const rawText = await raw.inputValue();
+    await raw.fill(rawText.replace('"name": "Ping"', '"name": "Ping the API"'));
+    assert.strictEqual(await page.locator('#saved').innerText(), 'Raw: not applied yet.');
+    await page.click('#tabs button:has-text("Request")');
+    await page.waitForSelector(row('Ping the API'));
+    assert.strictEqual(def('Smoke', 'Ping.request.js').name, 'Ping the API', 'leaving the Raw tab dropped what was typed');
+    await page.click('#tabs button:has-text("Raw")');
+    await raw.fill('{ "name": ');
+    await page.click(row('Open orders'));
+    await page.waitForSelector('.note.bad');
+    assert.match(await page.locator('.note.bad').innerText(), /not valid JSON/);
+    assert.strictEqual(await page.locator('#tabs button[aria-selected="true"]').innerText(), 'Raw', 'text that could not be written was left behind');
+    assert.strictEqual(await raw.inputValue(), '{ "name": ');
+    await page.click('.note.bad .x');
+    await raw.fill(rawText);
+    await page.click('#tabbody button:has-text("Apply")');
+    await page.waitForSelector(row('Ping'));
+    await settled();
+    assert.strictEqual(await page.locator('#pillChanges').innerText(), '1 changed');
+    problems.length = 0;                             // the refused write above is reported by the browser as a failed request; that one is expected
+    ok('the Raw tab writes on Apply and on leaving; text that is not valid JSON is not lost and not written');
+
     // names and values from the collection are shown as text, never run as HTML
     const nasty = '<img src=x onerror="document.title=\'run\'"><script>document.title="run"</script>';
     await page.click(row('Smoke'));
@@ -187,8 +213,8 @@ async function main() {
     await page.waitForSelector('main table.diff');
     assert.strictEqual(read(path.join(dir, 'Demo.postman_collection.json')), before, 'the collection file changed before Pack');
     await page.click('main button.primary:has-text("Pack")');
-    await page.waitForSelector('.note.good');
-    assert.match(await page.locator('.note.good').innerText(), /Packed into Demo\.postman_collection\.json: \+\d+ .\d+ lines \(layout kept\)/);
+    await page.waitForSelector('.note.good:has-text("Packed into")');
+    assert.match(await page.locator('.note.good:has-text("Packed into")').innerText(), /Packed into Demo\.postman_collection\.json: \+\d+ .\d+ lines \(layout kept\)/);
     await settled();
     assert.strictEqual(await page.locator('#pillPack').innerText(), 'packed: the JSON holds every edit');
     const packed = JSON.parse(read(path.join(dir, 'Demo.postman_collection.json')));

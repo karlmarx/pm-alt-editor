@@ -117,17 +117,28 @@ function parseDef(text, file) {
   if (!isPlain(value)) throw new Problem(`${file}: expected an object after \`${DEF_START}\``);
   return value;
 }
-/* The path of a tree file, after making sure it really is inside the tree: a link that leads somewhere else is refused,
- * so nothing outside the tree is ever read into the collection or written to. */
+/* The path of a tree file, after making sure it really is inside the tree. No step of the path may be a link, whether
+ * or not the link's target exists, so nothing outside the tree is ever read into the collection or written to. */
 function inTree(treeDir, file) {
-  const abs = path.join(treeDir, file), root = fs.realpathSync(treeDir);
-  let probe = abs;
-  while (!fs.existsSync(probe)) probe = path.dirname(probe);
-  const real = fs.realpathSync(probe), r = path.relative(root, real);
-  if (r.startsWith('..') || path.isAbsolute(r)) throw new Problem(`${file} leads outside the tree (a link?) - refused`);
-  if (fs.existsSync(abs) && fs.lstatSync(abs).isSymbolicLink()) throw new Problem(`${file} is a link, not a file - refused`);
-  return abs;
+  const parts = String(file).split('/').filter(part => part && part !== '.');
+  if (parts.includes('..')) throw new Problem(`${file} leads outside the tree - refused`);
+  let at = treeDir;
+  for (let i = 0; i < parts.length; i++) {
+    at = path.join(at, parts[i]);
+    const found = fs.lstatSync(at, { throwIfNoEntry: false });
+    if (!found) break;
+    if (found.isSymbolicLink()) throw new Problem(`${file} ${i === parts.length - 1 ? 'is a link, not a file' : 'is reached through a link'} - refused`);
+  }
+  return path.join(treeDir, ...parts);
 }
+/* Is this path inside the current folder once every link on the way is followed? A path that does not exist yet is
+ * judged by the nearest folder that does. */
+function reallyInsideCwd(p) {
+  let probe = path.resolve(p);
+  while (!fs.lstatSync(probe, { throwIfNoEntry: false }) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+  try { const r = path.relative(fs.realpathSync(process.cwd()), fs.realpathSync(probe)); return !r.startsWith('..') && !path.isAbsolute(r); } catch (e) { return false; }
+}
+const isLink = p => { const found = fs.lstatSync(p, { throwIfNoEntry: false }); return !!found && found.isSymbolicLink(); };
 function readDef(treeDir, file) {
   const abs = inTree(treeDir, file);
   if (!fs.existsSync(abs)) throw new Problem(`${file} is missing`);
@@ -234,7 +245,7 @@ function findTrees() {
   return found;
 }
 function readMeta(treeDir) {
-  const file = path.join(treeDir, META);
+  const file = inTree(treeDir, META);
   if (!fs.existsSync(file)) fail(`${rel(treeDir)} is not an unpacked collection (it has no ${META}). Run: ${pmx.SELF} tree unpack <collection.json>`);
   let meta;
   try { meta = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { fail(`${rel(file)} is not valid JSON`); }
@@ -246,12 +257,13 @@ function openTree(o = {}) {
   if (!treeDir) {
     let found = findTrees();
     if (o.collection) found = found.filter(dir => { try { return path.resolve(readMeta(dir).collection) === path.resolve(o.collection); } catch (e) { return false; } });
-    if (!found.length) fail(`nothing is unpacked here yet. Run: ${pmx.SELF} tree unpack <collection.json>`);
+    if (!found.length) { const none = new Problem(`nothing is unpacked here yet. Run: ${pmx.SELF} tree unpack <collection.json>`); none.nothingUnpacked = true; throw none; }
     if (found.length > 1) fail('more than one collection is unpacked here - say which with --tree <folder>:\n  ' + found.map(rel).join('\n  '));
     treeDir = found[0];
   }
-  if (!insideCwd(treeDir)) fail('the tree folder must be inside the current folder');
+  if (!insideCwd(treeDir) || !reallyInsideCwd(treeDir)) fail('the tree folder must be inside the current folder');
   const meta = readMeta(treeDir);
+  if (!reallyInsideCwd(meta.collection) || isLink(meta.collection)) fail(`${rel(path.join(treeDir, META))} names a collection that is a link or is reached through one - refused`);
   const ctx = pmx.getCtx({ collection: meta.collection }, undefined);
   const ws = { treeDir, meta, collection: ctx.collection, baseCopy: ctx.f('tree-base.json') };
   ws.baseText = findBase(ws);
@@ -274,7 +286,7 @@ function findBase(ws) {
   }
   return fail(`cannot find ${rel(ws.collection)} as it was when ${rel(ws.treeDir)}/ was unpacked (not in the scratch folder, not on disk, not in git history).\nIf the edits in ${rel(ws.treeDir)}/ are not needed any more, unpack again with --force.`);
 }
-const saveMeta = ws => fs.writeFileSync(path.join(ws.treeDir, META), JSON.stringify(ws.meta, null, 1) + '\n');
+const saveMeta = ws => writeAtomic(inTree(ws.treeDir, META), JSON.stringify(ws.meta, null, 1) + '\n');
 const buildTree = (ws, opt) => build(ws.treeDir, { scripts: ws.orig.scripts }, ws.baseText, opt);
 const writeFiles = (dir, files) => { for (const [file, content] of files) { const abs = path.join(dir, file); fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, content); } };
 
@@ -284,8 +296,9 @@ function unpackTree(o, collectionArg) {
   const text = readStrict(ctx.collection);
   const parsed = JSON.parse(stripBom(text)), top = isPlain(parsed) && isPlain(parsed.collection) && !parsed.item ? parsed.collection : parsed;
   if (!isPlain(top) || !Array.isArray(top.item)) fail(`${rel(ctx.collection)} does not look like a Postman collection (no "item" list)`);
+  if (!insideCwd(ctx.collection) || !reallyInsideCwd(ctx.collection) || isLink(ctx.collection)) fail('the collection must be a file inside the current folder');
   const treeDir = o.tree ? path.resolve(o.tree) : path.join(ctx.work, 'tree');
-  if (!insideCwd(treeDir)) fail('the tree folder must be inside the current folder');
+  if (!insideCwd(treeDir) || !reallyInsideCwd(treeDir)) fail('the tree folder must be inside the current folder');
   if (fs.existsSync(treeDir) && !fs.existsSync(path.join(treeDir, META)) && fs.readdirSync(treeDir).length) fail(`${rel(treeDir)}/ exists and holds other files. Name a new or empty folder.`);
   if (fs.existsSync(path.join(treeDir, META)) && !o.force) {
     let lost = true;                             // would unpacking again throw away edits that are not in the collection?
@@ -328,13 +341,13 @@ function packOnto(ws, b, out, onDisk, opt) {
   if (!merged || merged.open) return { errors: [`${moved}${merged ? `, and ${merged.open} place(s) were changed both there and in the files` : ''}. The two cannot be combined automatically.\n  Either unpack again (the edits in the files are lost), or pack with --force (the other change is lost).`] };
   const ops = diffOps(onDisk.split('\n'), merged.text.split('\n'));
   const result = { errors: [], text: merged.text, how: 'merged into the newer collection file', json: JSON.parse(stripBom(merged.text)), scripts: b.changed, added: ops.filter(x => x[0] === '+').length, removed: ops.filter(x => x[0] === '-').length, ops, onto: true, base: onDisk };
+  if (same(result.json, theirs)) Object.assign(result, { text: onDisk, how: 'the newer collection file already held every edit; the files follow it', held: true, added: 0, removed: 0, ops: ops.filter(x => x[0] === '=') });
   if (opt.dry) return result;
-  if (same(result.json, theirs)) return { errors: [`${moved} and already holds everything in the files. Unpack again to continue from it.`] };
-  writeAtomic(ws.collection, merged.text);
+  if (!result.held) writeAtomic(ws.collection, result.text);
   fs.rmSync(ws.treeDir, { recursive: true, force: true });
-  writeFiles(ws.treeDir, split(merged.text).files);
+  writeFiles(ws.treeDir, split(result.text).files);
   const blob = spawnSync('git', ['hash-object', '--stdin'], { input: onDisk, encoding: 'utf8' });
-  ws.meta = Object.assign({}, ws.meta, { baseSha: sha(onDisk), baseBlob: blob.status === 0 ? blob.stdout.trim() : null, lastPackSha: sha(merged.text) });
+  ws.meta = Object.assign({}, ws.meta, { baseSha: sha(onDisk), baseBlob: blob.status === 0 ? blob.stdout.trim() : null, lastPackSha: sha(result.text) });
   saveMeta(ws);
   fs.mkdirSync(path.dirname(ws.baseCopy), { recursive: true });
   fs.writeFileSync(ws.baseCopy, onDisk);
@@ -399,7 +412,7 @@ function findNode(ws, id) {
 }
 const bodyOf = (def, kind) => (kind === 'collection' && isPlain(def.collection) && !def.item ? def.collection : def);
 const readText = (ws, file) => { const abs = inTree(ws.treeDir, file); return fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : null; };
-const writeText = (ws, file, text) => { const abs = inTree(ws.treeDir, file); fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, text); };
+const writeText = (ws, file, text) => { const abs = inTree(ws.treeDir, file); fs.mkdirSync(path.dirname(abs), { recursive: true }); writeAtomic(abs, text); };
 
 /* Everything the page needs to show and edit one request, folder or the collection. */
 function readNode(ws, id) {
@@ -694,7 +707,8 @@ function reportPack(ws, r, quiet) {
     r.errors.forEach(e => console.log('  ' + e));
     return 2;
   }
-  console.log(`packed -> ${rel(ws.collection)}   (+${r.added} -${r.removed} lines against the unpacked version; ${r.how})`);
+  console.log(`packed -> ${rel(ws.collection)}   (+${r.added} -${r.removed} lines${r.onto ? '' : ' against the unpacked version'}; ${r.how})`);
+  if (r.onto) console.log(`  ${rel(ws.collection)} had changed since it was unpacked. The files in ${rel(ws.treeDir)}/ were written again from the result.`);
   if (r.scripts.length) console.log('  scripts changed: ' + r.scripts.join(', '));
   if (!quiet) console.log(`next: ${pmx.SELF} tree test`);
   return 0;
@@ -718,7 +732,7 @@ function cmdStatus(o) {
   const dry = packTree(ws, Object.assign(packOptions(o), { dry: true }));
   if (!dry.errors.length) {
     const onDisk = fs.existsSync(ws.collection) ? readStrict(ws.collection) : null;
-    if (dry.onto) console.log(`${rel(ws.collection)} was changed by something else since it was unpacked; \`tree pack\` will merge these edits into it`);
+    if (dry.onto) console.log(`${rel(ws.collection)} was changed by something else since it was unpacked; \`tree pack\` will ${dry.held ? 'write the files again from it' : 'merge these edits into it'}`);
     console.log(onDisk === dry.text ? `${rel(ws.collection)} already holds these edits` : `${rel(ws.collection)} does not hold these edits yet (+${dry.added} -${dry.removed} lines). Run: ${pmx.SELF} tree pack`);
   } else dry.errors.forEach(e => console.log('  ERROR ' + e));
   return 0;
@@ -817,13 +831,13 @@ function serve(ws, o = {}) {
       const dry = dryPack();
       if (dry.errors.length) return { errors: dry.errors };
       const onDisk = fs.existsSync(ws.collection) ? readStrict(ws.collection) : null;
-      return { errors: [], packed: onDisk === dry.text, added: dry.added, removed: dry.removed, how: dry.how, onto: !!dry.onto };
+      return { errors: [], packed: onDisk === dry.text && !dry.held, added: dry.added, removed: dry.removed, how: dry.how, onto: !!dry.onto, held: !!dry.held };
     },
     'GET /api/preview': () => {
       const dry = dryPack();
       if (dry.errors.length) return { errors: dry.errors };
       const base = (dry.base || ws.baseText).split('\n'), now = dry.text.split('\n');
-      return { errors: [], how: dry.how, added: dry.added, removed: dry.removed, onto: !!dry.onto, lines: hunks(dry.ops.map(op => (op[0] === '=' ? { t: '=', a: op[1] + 1, b: op[2] + 1, s: now[op[2]] } : op[0] === '-' ? { t: '-', a: op[1] + 1, s: base[op[1]] } : { t: '+', b: op[1] + 1, s: now[op[1]] }))) };
+      return { errors: [], how: dry.how, added: dry.added, removed: dry.removed, onto: !!dry.onto, held: !!dry.held, lines: hunks(dry.ops.map(op => (op[0] === '=' ? { t: '=', a: op[1] + 1, b: op[2] + 1, s: now[op[2]] } : op[0] === '-' ? { t: '-', a: op[1] + 1, s: base[op[1]] } : { t: '+', b: op[1] + 1, s: now[op[1]] }))) };
     },
     'GET /api/search': q => search(ws, q.q),
     'GET /api/variables': () => variables(ws, chosenEnv),
@@ -835,7 +849,7 @@ function serve(ws, o = {}) {
     'POST /api/move': (q, b) => { moveNode(ws, b.id, b.by); return { ok: true }; },
     'POST /api/duplicate': (q, b) => ({ id: duplicateNode(ws, b.id) }),
     'POST /api/revert': (q, b) => { revert(ws, b.id); return { ok: true }; },
-    'POST /api/pack': () => { const r = packTree(ws, {}); return r.errors.length ? { errors: r.errors } : { errors: [], how: r.how, added: r.added, removed: r.removed, onto: !!r.onto }; },
+    'POST /api/pack': () => { const r = packTree(ws, {}); return r.errors.length ? { errors: r.errors } : { errors: [], how: r.how, added: r.added, removed: r.removed, onto: !!r.onto, held: !!r.held }; },
     'POST /api/environment': (q, b) => { if (b.file && !envList().some(e => e.file === b.file)) fail('that is not an environment file here'); chosenEnv = b.file || null; return { ok: true }; },
     'POST /api/test': async (q, b) => {
       if (running) fail('a run is still going');
@@ -901,11 +915,13 @@ function serve(ws, o = {}) {
   });
 }
 async function cmdUi(o) {
+  const which = Object.assign({}, o, { collection: o.collection || o._[0] });
   let ws;
-  try { ws = openTree(o); } catch (e) {
-    if (!(e instanceof Problem) || !(o._[0] || o.collection)) throw e;
-    unpackTree(o, o._[0]);                       // `tree ui <collection.json>` on a collection that is not unpacked yet
-    ws = openTree(o);
+  try { ws = openTree(which); } catch (e) {
+    if (!(e instanceof Problem) || !e.nothingUnpacked) throw e;
+    const r = unpackTree(o, o._[0]);              // nothing unpacked yet: do that first (the collection named here, or the configured one)
+    console.log(`unpacked the whole collection -> ${rel(r.treeDir)}/   (${r.requests} requests, ${r.folders} folders, ${r.scripts} scripts)`);
+    ws = openTree(Object.assign({}, which, { tree: r.treeDir }));
   }
   await serve(ws, o);
   return 0;

@@ -250,17 +250,18 @@ async function main() {
   refused('a script with a syntax error', /SYNTAX ERROR .*Open_orders\.test\.js/, undo);
   fs.writeFileSync(T('Orders', 'Open_orders.test.js'), read(T('Orders', 'Open_orders.test.js')).replace(/pm\.test\("There are open orders to look at"[\s\S]*?\n}\);\n/, ''));
   refused('a removed pm.test', /dropped from 2 to 1/, undo);
-  fs.appendFileSync(path.join(dir, 'Demo.postman_collection.json'), '\n');
+  fs.writeFileSync(path.join(dir, 'Demo.postman_collection.json'), '{ not json');           // the collection replaced by something unreadable
   r = pmx(dir, 'tree', 'pack');
   assert.strictEqual(r.code, 2, r.out);
-  assert.match(r.out, /was changed by something else since `tree unpack`/);
+  assert.match(r.out, /was changed by something else since `tree unpack`\. The two cannot be combined automatically/);
+  assert.strictEqual(read(path.join(dir, 'Demo.postman_collection.json')), '{ not json');
   fs.writeFileSync(path.join(dir, 'Demo.postman_collection.json'), beforeRefusals);
   editDef(T('collection.js'), d => d.variable.push({ key: 'pending', value: '1' }));
   r = pmx(dir, 'tree', 'unpack', 'Demo.postman_collection.json');
   assert.strictEqual(r.code, 2, r.out);
   assert.match(r.out, /has edits that are not in Demo\.postman_collection\.json yet/);
   assert.strictEqual(pmx(dir, 'tree', 'unpack', 'Demo.postman_collection.json', '--force').code, 0);
-  ok('refused, with the collection untouched: broken JSON, pointers that leave the tree, a syntax error, a removed test, a file changed underneath, unpacking over unpacked edits');
+  ok('refused, with the collection untouched: broken JSON, pointers that leave the tree, a syntax error, a removed test, a collection replaced by something unreadable, unpacking over unpacked edits');
 
   // 7. the other pmx commands are not affected by a tree next to them
   const d7 = scratch();
@@ -376,7 +377,28 @@ async function main() {
   assert.match(r.out, /1 place\(s\) were changed both there and in the files\. The two cannot be combined automatically/);
   assert.strictEqual(read(C9), packed9.replace('Ping (renamed upstream)', 'Ping (theirs)'), 'a refused pack wrote to the collection');
   assert.match(read(T9('Smoke', renamed9[0])), /Ping \(mine\)/, 'a refused pack touched the files');
-  ok('the collection changed underneath: pack merges the edits from the files into it and refreshes the files; a clash is refused with nothing written');
+  // packed already, then the collection changes again around those edits (git merged main into the branch): the files follow it
+  const d9b = scratch(), C9b = path.join(d9b, 'Demo.postman_collection.json'), T9b = (...parts) => path.join(d9b, 'files', ...parts);
+  makeDemo(d9b);
+  assert.strictEqual(pmx(d9b, 'tree', 'unpack', 'Demo.postman_collection.json', '--tree', 'files').code, 0);
+  editDef(T9b('collection.js'), d => d.variable.push({ key: 'mine', value: '1' }));
+  assert.strictEqual(pmx(d9b, 'tree', 'pack').code, 0);
+  fs.writeFileSync(C9b, read(C9b).replace('"name": "Ping"', '"name": "Ping (renamed upstream)"'));
+  const held9 = read(C9b);
+  assert.match(pmx(d9b, 'tree', 'status').out, /`tree pack` will write the files again from it/);
+  r = pmx(d9b, 'tree', 'pack');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /the newer collection file already held every edit; the files follow it/);
+  assert.strictEqual(read(C9b), held9, 'the collection was written although it already held every edit');
+  assert.ok(fs.readdirSync(T9b('Smoke')).some(f => /renamed_upstream/.test(f)), 'the files do not show the change from upstream');
+  r = pmx(d9b, 'tree', 'status');
+  assert.match(r.out, /no changes against the collection as it was unpacked/);
+  assert.match(r.out, /already holds these edits/);
+  editDef(T9b('collection.js'), d => d.variable.push({ key: 'later', value: '2' }));          // and work goes on from there
+  assert.strictEqual(pmx(d9b, 'tree', 'finish').code, 0);
+  assert.deepStrictEqual(parse(read(C9b)).variable.map(v => v.key), ['baseUrl', 'mine', 'later']);
+  assert.strictEqual(parse(read(C9b)).item[0].item[0].name, 'Ping (renamed upstream)');
+  ok('the collection changed underneath: pack merges the edits from the files into it and refreshes the files; a clash is refused with nothing written; a collection that already holds the edits is followed');
 
   // 10. the page's server: only this machine, only with the key; every edit the page can make; newman; nothing outside the tree
   const d10 = scratch(), C10 = path.join(d10, 'Demo.postman_collection.json'), T10 = (...parts) => path.join(d10, '.pmx', 'Demo', 'tree', ...parts);
@@ -384,7 +406,7 @@ async function main() {
   fs.writeFileSync(path.join(d10, 'pmx.config.json'), JSON.stringify({ collection: 'Demo.postman_collection.json', newman: { timeoutRequest: 10000 } }));
   fs.writeFileSync(path.join(d10, 'local.postman_environment.json'), JSON.stringify({ name: 'local', values: [{ key: 'region', value: 'north', enabled: true }, { key: 'token', value: 'not-shown', type: 'secret', enabled: true }] }));
   const before10 = read(C10);
-  const ui = spawn(process.execPath, [PMX, 'tree', 'ui', 'Demo.postman_collection.json', '--no-open'], { cwd: d10, stdio: ['ignore', 'pipe', 'pipe'] });
+  const ui = spawn(process.execPath, [PMX, 'tree', 'ui', '--no-open'], { cwd: d10, stdio: ['ignore', 'pipe', 'pipe'] });   // nothing is unpacked yet: it unpacks the configured collection
   const api10 = spawn(process.execPath, [path.join(ROOT, 'demo', 'mock-server.js')], { env: demoEnv, stdio: 'ignore' });
   try {
     let printed = '';
@@ -514,22 +536,37 @@ async function main() {
     await refusedBy('POST', '/api/revert', { id: '../../../pmx.config.json' }, /did not exist when the collection was unpacked/);
     await refusedBy('POST', '/api/def', { id: orders, text: '{ "name": ' }, /not valid JSON/);
     assert.ok(!fs.existsSync(outside), 'something was written outside the tree');
-    if (process.platform !== 'win32') {                                             // a link inside the tree that leads out of it is never read or written
+    if (process.platform !== 'win32') {                                             // a link in the tree is never read through or written through,
+      const pingTest = T10('Smoke', 'Ping.test.js'), pingDef = T10('Smoke', 'Ping.request.js'), pingDefText = read(pingDef);
+      const LINK = /is a link, not a file - refused|is reached through a link - refused/;
+      const refusedLink = async (what, change, calls, undo) => {                    // whether or not what it points at exists
+        change();
+        st = await get('/api/state');
+        assert.match(st.problems.join('\n'), LINK, what);
+        for (const [method, url, body] of calls) await refusedBy(method, url, body, LINK);
+        a = await post('/api/pack');
+        assert.match(a.errors.join('\n'), LINK, what);
+        assert.strictEqual(read(C10), before10, what + ': a refused pack wrote to the collection');
+        undo();
+      };
+      const viaScript = [['POST', '/api/script', { file: 'Smoke/Ping.test.js', text: 'overwritten' }], ['POST', '/api/revert', { id: 'Smoke/Ping.test.js' }], ['GET', '/api/node?id=' + encodeURIComponent('Smoke/Ping.request.js')]];
+      const viaDef = [['POST', '/api/def', { id: 'Smoke/Ping.request.js', def: { name: 'x', request: {} } }], ['POST', '/api/revert', { id: 'Smoke/Ping.request.js' }], ['GET', '/api/node?id=' + encodeURIComponent('Smoke/Ping.request.js')]];
       fs.writeFileSync(outside, 'var secret = 1;');
-      fs.rmSync(T10('Smoke', 'Ping.test.js'));
-      fs.symlinkSync(outside, T10('Smoke', 'Ping.test.js'));
-      st = await get('/api/state');
-      assert.match(st.problems.join('\n'), /Ping\.test\.js leads outside the tree \(a link\?\) - refused/);
-      assert.deepStrictEqual(st.root.children[0].children.map(c => c.name), ['Ping', 'Version: 2?'], 'the request with the link is no longer shown');
-      await refusedBy('POST', '/api/script', { file: 'Smoke/Ping.test.js', text: 'overwritten' }, /leads outside the tree/);
-      await refusedBy('GET', '/api/node?id=' + encodeURIComponent('Smoke/Ping.request.js'), undefined, /leads outside the tree/);
-      a = await post('/api/pack');
-      assert.match(a.errors.join('\n'), /leads outside the tree \(a link\?\) - refused/);
-      assert.strictEqual(read(C10), before10, 'a refused pack wrote to the collection');
+      await refusedLink('a script that is a link to a file elsewhere', () => { fs.rmSync(pingTest); fs.symlinkSync(outside, pingTest); }, viaScript, () => fs.rmSync(pingTest));
       assert.strictEqual(read(outside), 'var secret = 1;');
-      fs.rmSync(T10('Smoke', 'Ping.test.js'));
       fs.rmSync(outside);
+      await refusedLink('a script that is a link to a file that does not exist yet', () => fs.symlinkSync(outside, pingTest), viaScript, () => fs.rmSync(pingTest));
+      st = await get('/api/state');
+      assert.deepStrictEqual(st.root.children[0].children.map(c => c.name), ['Ping', 'Version: 2?'], 'a request whose script is missing is no longer shown');
       await post('/api/revert', { id: 'Smoke/Ping.test.js' });
+      await refusedLink('a definition that is a link to a file that does not exist yet', () => { fs.rmSync(pingDef); fs.symlinkSync(outside, pingDef); }, viaDef, () => { fs.rmSync(pingDef); fs.writeFileSync(pingDef, pingDefText); });
+      const away = fs.mkdtempSync(path.join(os.tmpdir(), 'pmx-away-'));
+      fs.renameSync(T10('Smoke'), path.join(away, 'Smoke'));
+      await refusedLink('a folder that is a link', () => fs.symlinkSync(path.join(away, 'Smoke'), T10('Smoke')), [['POST', '/api/def', { id: 'Smoke/folder.js', def: { name: 'x', item: { $children: [] } } }], ['POST', '/api/revert', { id: 'Smoke/Ping.test.js' }], ['POST', '/api/revert', { id: 'Smoke/folder.js' }]],
+        () => { fs.rmSync(T10('Smoke')); fs.renameSync(path.join(away, 'Smoke'), T10('Smoke')); });
+      assert.ok(!fs.existsSync(outside) && fs.readdirSync(away).length === 0, 'something was written through a link');
+      st = await get('/api/state');
+      assert.deepStrictEqual(st.problems, []);
     }
 
     // pack and run: the edits are in the collection JSON, with its layout kept, and newman agrees
@@ -554,7 +591,33 @@ async function main() {
     const exit = await new Promise(resolve => { if (ui.exitCode != null) resolve(ui.exitCode); else ui.on('exit', resolve); setTimeout(() => resolve('still running'), 5000); });
     assert.strictEqual(exit, 0, 'tree ui did not stop when the page closed it');
   } finally { ui.kill(); api10.kill(); }
-  ok('the page\'s server: answers only this machine and only with its key; shows, edits, adds, moves, removes and puts back through its API; diffs; newman with file:line and an environment; never reads or writes outside the tree');
+  if (process.platform !== 'win32') {              // the note may not be a link, and may not name a collection that is reached through one
+    const note10 = T10('.pmx-tree.json'), noteText10 = read(note10), elsewhere10 = fs.mkdtempSync(path.join(os.tmpdir(), 'pmx-else-'));
+    fs.writeFileSync(path.join(elsewhere10, 'note.json'), noteText10);
+    fs.rmSync(note10); fs.symlinkSync(path.join(elsewhere10, 'note.json'), note10);
+    r = pmx(d10, 'tree', 'pack');                                                   // a folder whose note is a link is not taken for a tree at all
+    assert.strictEqual(r.code, 2, r.out);
+    assert.match(r.out, /nothing is unpacked here yet/);
+    r = pmx(d10, 'tree', 'pack', '--tree', path.join('.pmx', 'Demo', 'tree'));
+    assert.strictEqual(r.code, 2, r.out);
+    assert.match(r.out, /\.pmx-tree\.json is a link, not a file - refused/);
+    assert.strictEqual(read(path.join(elsewhere10, 'note.json')), noteText10, 'the note was written through a link');
+    fs.rmSync(note10);
+    fs.symlinkSync(elsewhere10, path.join(d10, 'linked'));
+    fs.writeFileSync(note10, noteText10.replace('"Demo.postman_collection.json"', '"linked/Elsewhere.json"'));
+    for (const command of ['status', 'pack', 'finish']) {
+      r = pmx(d10, 'tree', command);
+      assert.strictEqual(r.code, 2, command + ': ' + r.out);
+      assert.match(r.out, /names a collection that is a link or is reached through one - refused/, command);
+    }
+    assert.deepStrictEqual(fs.readdirSync(elsewhere10), ['note.json'], 'a collection was written through a linked folder');
+    fs.symlinkSync(path.join(elsewhere10, 'tree'), path.join(d10, 'linked-tree'));
+    r = pmx(d10, 'tree', 'unpack', 'Demo.postman_collection.json', '--tree', 'linked-tree/files');
+    assert.strictEqual(r.code, 2, r.out);
+    assert.match(r.out, /must be inside the current folder/);
+    assert.deepStrictEqual(fs.readdirSync(elsewhere10), ['note.json']);
+  }
+  ok('the page\'s server: answers only this machine and only with its key; shows, edits, adds, moves, removes and puts back through its API; diffs; newman with file:line and an environment; never reads or writes outside the tree, also not through a link whose target does not exist yet');
 
   // 11. fuzz: random collections must come back identical, and the writer must reproduce their bytes
   let checkedWriter = 0;

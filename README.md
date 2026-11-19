@@ -7,7 +7,7 @@ Two tools, no dependencies:
 
 ## The modes
 
-There are four ways of working. Each has its own commands, and none of them gets in the way of the others.
+There are four ways of working. Each has its own commands.
 
 ![The four modes and the part of a collection each works on](docs/modes.svg)
 
@@ -418,7 +418,7 @@ The files are a **temporary working copy**. The collection JSON stays the file t
 
 ### Try it on the demo
 
-With the sample collection created and the mock API running (steps 1 and 2 of [the demo above](#try-it-the-demo)):
+You need the sample collection and the running mock API: steps 1 and 2 of [the demo above](#try-it-the-demo). If you did that demo to the end, its fixes are in the collection, so create a fresh one first: `node demo/make-demo.js` from the repo root.
 
 ```bash
 cd demo
@@ -431,8 +431,6 @@ node ../pmx.js tree ui Demo.postman_collection.json
 This unpacks the collection and opens the page in your browser. **Run tests** shows the same 5 failures as the first demo. Click one to land on its line, fix it, run again.
 
 ![The test results in the page: failing tests by request, each with its file and line](docs/tree-ui-results.png)
-
-If you did the first demo, its fixes are already in the collection. Run `node demo/make-demo.js` from the repo root for a fresh one.
 
 ### The page
 
@@ -450,7 +448,7 @@ If you did the first demo, its fixes are already in the collection. Run `node de
 | **All changes**, **Collection JSON** | Every change in one place, and the exact lines **Pack** will write into the collection JSON |
 | **Run tests**, **Run this** | Pack, then newman on everything or on one folder or request, with an environment file if you pick one |
 
-Every edit is written to the files a moment after you stop typing. Nothing reaches the collection JSON until **Pack** or **Run tests**.
+Every edit is written to the files a moment after you stop typing (in **Raw**: when you press **Apply** or leave the tab). Nothing reaches the collection JSON until **Pack**, **Run tests** or **Run this**.
 
 A failing test, opened at its line:
 
@@ -482,7 +480,7 @@ node tools/pmx.js tree unpack path/to/Your.postman_collection.json --tree collec
 git add collection-files && git commit -m "Unpack the collection (no changes yet)"
 ```
 
-Edit in the page (`node tools/pmx.js tree ui`) or by hand, and commit as you go. Those commits are what reviewers read. To check where you are:
+Edit in the page (`node tools/pmx.js tree ui`) or by hand, and commit the folder as you go (`git add collection-files`). Those commits are what reviewers read. A test run also writes the collection JSON; that change can wait for the last commit. To check where you are:
 
 ```bash
 node tools/pmx.js tree status
@@ -508,27 +506,27 @@ git add -A collection-files path/to/Your.postman_collection.json && git commit -
 
 `tree finish` packs one last time, checks that the collection JSON holds every edit, and removes the files. What main receives is the collection JSON, with only the edited lines changed.
 
-If the collection JSON changes while the files are unpacked (main was merged into the branch, say), `tree pack` merges your edits into the newer file and writes the files again from the result. If both sides changed the same value, it refuses and writes nothing.
+If the collection JSON changes while the files are unpacked (main was merged into the branch, say), the next `tree pack` or test run merges your edits into the newer file and writes the files again from the result. If both sides changed the same value, it refuses and writes nothing. Git will not merge over a collection JSON with uncommitted changes from a test run: commit it first, or put it back with `git checkout -- path/to/Your.postman_collection.json` (the files hold your edits).
 
 ### The files
 
 ![Which part of the collection becomes which file](docs/tree-files.svg)
 
-A definition file is `module.exports = ` followed by JSON. It is read as data and never run. By hand you can do everything the page does: change a URL, a header, a body or a variable, edit the scripts, add a request (write its file and list it in `$children`), remove, reorder or rename.
+A definition file (every file that is not a script) is `module.exports = ` followed by JSON. It is read as data and never run. By hand you can do everything the page does: change a URL, a header, a body or a variable, edit the scripts, add a request (write its file and list it in `$children`), remove, reorder or rename.
 
 ### Commands
 
 | Command | Does |
 |---|---|
 | `tree unpack <collection.json> [--tree <folder>]` | Write every request, folder and script as its own file. Default place: `.pmx/<name>/tree/` |
-| `tree ui [<collection.json>]` | Open the page. Unpacks first if needed. `--no-open` only prints the link |
+| `tree ui [<collection.json>]` | Open the page. Unpacks first if nothing is unpacked yet. `--no-open` only prints the link |
 | `tree status` | What differs from the collection as it was unpacked, file by file |
 | `tree pack` | Build the collection JSON from the files. Only what changed moves |
 | `tree test [--environment <file>] [--folder <name>]` | Pack, then run newman. Each failing test is listed with its file and line |
 | `tree finish [--keep]` | Pack, check, and remove the files. Do this before merging |
 | `tree check <collection.json> [--run]` | Measure the round trip without touching anything: unpack, build, compare. `--run` also compares newman results |
 
-`tree pack` applies the same guards as `pack`: a script that does not parse and a drop in the number of `pm.test` calls are refused.
+`tree pack` applies the same guards as `pack`: a script that does not parse and a drop in the number of `pm.test` calls are refused. The count is per script. Removing a whole request, or a script from its definition, is your decision and is not refused.
 
 ### How it compares with Fix tests
 
@@ -590,9 +588,9 @@ In Claude Code, copy `claude/*.md` to `.claude/agents/`: `merge-resolver` settle
 
 The pmx `view` page is one static file. It contains no JavaScript, loads no fonts, images or other files, and carries a Content-Security-Policy that blocks scripts and every network request. Text from your scripts, request names and the test log is escaped. Characters that cannot be seen, or that change the direction text is shown in, are displayed as `U+XXXX`: control and format characters, unusual spaces, variation selectors and blank filler letters. Nothing listens on a port.
 
-The treemerge browser view is the one thing that does listen on a port. It is served by a small server inside treemerge that accepts connections from your own machine only (`127.0.0.1`), on a random free port, and answers only requests that carry the secret key in the link it prints. It rejects requests addressed to any other host name, and it stops when you choose **Save & close** or press Ctrl+C. `--tui` and `--no-ui` start no server.
+The treemerge browser view and the `pmx tree ui` page are the two things that listen on a port. The treemerge view is served by a small server inside treemerge that accepts connections from your own machine only (`127.0.0.1`), on a random free port, and answers only requests that carry the secret key in the link it prints. It rejects requests addressed to any other host name, and it stops when you choose **Save & close** or press Ctrl+C. `--tui` and `--no-ui` start no server.
 
-The `pmx tree ui` page is served the same way: `127.0.0.1` only, a random free port, a secret key in the link, other host names rejected. Every call the page makes also carries the key in a request header, which a page from another site cannot send. The page loads no fonts, scripts or images from anywhere, and its Content-Security-Policy allows only its own script. Text from your collection is put on the page as text, never as HTML. Through the page, pmx writes only real files inside the unpacked folder (a link that leads elsewhere is refused), the collection file, and its own scratch copy under `.pmx/`. From an environment file the page gets the names of the variables, never their values. It stops when you press Ctrl+C.
+The `pmx tree ui` page is served the same way: `127.0.0.1` only, a random free port, a secret key in the link, other host names rejected. Every call the page makes also carries the key in a request header, which a page from another site cannot send. The page loads no fonts, scripts or images from anywhere, and its Content-Security-Policy allows only its own script. Text from your collection is put on the page as text, never as HTML. Through the page, pmx writes only real files inside the unpacked folder, the collection file, and its own scratch copy under `.pmx/`. A link is never followed, whether or not what it points at exists. From an environment file pmx sends the page the names of the variables, not their values. Test results are shown as newman reports them, so a failing test's message can quote a value. It stops when you press Ctrl+C.
 
 `treemerge install` changes this clone only: it adds a merge driver and a mergetool to the clone's git config and writes the file patterns to `.gitattributes`.
 
@@ -616,7 +614,7 @@ npm test
 
 - **pmx** against a demo collection and a mock API: 23, including byte-identical round trips for 8 export shapes.
 - **treemerge** on its own, through real `git merge` runs, in the terminal, and over the browser UI's API: 19, including 1,500 random documents.
-- **The tree mode**: 11. Round trips of nine file layouts, a collection of about 1,700 requests and 250 random collections; edits through the files; what `tree pack` refuses; the files on a git branch from unpack to finish; a collection that changes underneath; and the page's server (who may talk to it, every edit it can make, newman, and that nothing outside the unpacked folder is read or written).
+- **The tree mode**: 11. Round trips of nine file layouts, a collection of about 1,700 requests and 250 random collections; edits through the files; what `tree pack` refuses; the files on a git branch from unpack to finish; a collection that changes underneath; and the page's server (who may talk to it, every edit it can make, newman, and that nothing is read or written through a link).
 
 The page itself has a separate check in a real browser. It needs Playwright, which the tool does not, so it is not part of `npm test`:
 

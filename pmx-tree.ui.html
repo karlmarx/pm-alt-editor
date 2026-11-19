@@ -172,7 +172,7 @@ function h(tag, props, ...kids) {
   return add(el, kids);
 }
 function add(el, ...kids) { for (const kid of kids.flat(4)) if (kid != null && kid !== false) el.append(kid); return el; }   // strings become text nodes
-const S = { st: null, pending: null, sel: 'collection.js', node: null, nodeError: '', tab: 'main', view: 'node', diffMode: 'unified', open: null, filter: '', onlyChanged: false, adding: null, focus: null, query: '', running: false, token: 0 };
+const S = { st: null, pending: null, sel: 'collection.js', node: null, nodeError: '', tab: 'main', view: 'node', diffMode: 'unified', open: null, filter: '', onlyChanged: false, adding: null, focus: null, query: '', running: false, token: 0, leave: null, rawDirty: false };
 try { if (localStorage.getItem('pmx-tree-diff') === 'split') S.diffMode = 'split'; } catch (e) { /* no storage: fine */ }
 
 /* ---------- talking to pmx ---------- */
@@ -209,7 +209,18 @@ function saveNow(key) {
   return chain;
 }
 function flush() { for (const key of [...saves.keys()]) saveNow(key); return chain; }
-function showSaved() { $('saved').textContent = saves.size || busy ? 'Saving…' : 'Every edit is saved to the files.'; }
+/* Before moving on: text in the Raw tab that was not applied yet is applied first. If it cannot be (not valid JSON), stay. */
+async function ready() {
+  if (S.leave) {
+    const leave = S.leave, wrote = S.rawDirty;
+    if (!(await leave())) return false;
+    S.leave = null;
+    if (wrote) { await refresh(); await loadNode(); }        // what was written is what the other tabs must show
+  }
+  await flush();
+  return true;
+}
+function showSaved() { $('saved').textContent = saves.size || busy ? 'Saving…' : S.rawDirty ? 'Raw: not applied yet.' : 'Every edit is saved to the files.'; }
 
 /* ---------- state ---------- */
 function findIn(n, id, parent) { if (n.id === id) return { node: n, parent: parent || null }; for (const c of n.children) { const r = findIn(c, id, n); if (r) return r; } return null; }
@@ -227,7 +238,7 @@ async function loadNode() {
   catch (e) { S.node = null; S.nodeError = e.message; }
 }
 async function select(id, opt) {
-  await flush();
+  if (!(await ready())) return;
   S.sel = id; S.view = 'node'; S.focus = (opt && opt.focus) || null;
   if (opt && opt.tab) S.tab = opt.tab;
   await loadNode();
@@ -235,7 +246,7 @@ async function select(id, opt) {
   renderHeader(); renderTree(); renderMain();
 }
 async function reloadAll() { await refresh(); if (S.st && !findIn(S.st.root, S.sel)) S.sel = 'collection.js'; await loadNode(); renderTree(); renderMain(); }
-async function show(view) { await flush(); S.view = view; renderHeader(); renderTree(); renderMain(); }
+async function show(view) { if (!(await ready())) return; S.view = view; renderHeader(); renderTree(); renderMain(); }
 
 /* ---------- header ---------- */
 function renderHeader() {
@@ -248,6 +259,7 @@ function renderHeader() {
   const pp = $('pillPack'), p = S.pending;
   if (!p) { pp.textContent = '…'; pp.className = 'pill'; }
   else if (p.errors.length) { pp.textContent = `cannot pack: ${p.errors.length} problem${p.errors.length > 1 ? 's' : ''}`; pp.className = 'pill bad'; }
+  else if (p.held) { pp.textContent = 'the JSON changed: Pack to follow it'; pp.className = 'pill warn'; }
   else if (p.packed) { pp.textContent = total ? 'packed: the JSON holds every edit' : 'JSON untouched'; pp.className = 'pill' + (total ? ' good' : ''); }
   else { pp.textContent = `not packed yet: +${p.added} −${p.removed}`; pp.className = 'pill warn'; }
   pp.title = p && !p.errors.length && !p.packed ? `The edits are in the files, not yet in ${st.collection} (+${p.added} −${p.removed} lines). Click to see them.` : 'Show what Pack writes into the collection JSON';
@@ -283,7 +295,7 @@ function renderTreebar() {
       const name = input.value.trim();
       if (!name) return;
       const hit = S.st && findIn(S.st.root, S.sel), parent = !hit ? 'collection.js' : hit.node.kind === 'request' ? hit.parent.id : hit.node.id, kind = S.adding;
-      await flush();
+      if (!(await ready())) return;
       const r = await guard(() => post('/api/add', { parent, kind, name }));
       if (!r) return;
       S.adding = null; S.open.add(parent); renderTreebar();
@@ -325,7 +337,7 @@ function renderTree() {
   if (st.removed.length) {
     box.append(h('div', { class: 'group' }, `Removed (${st.removed.length})`));
     for (const r of st.removed) box.append(h('div', { class: 'row' }, h('span', { class: 'caret' }), h('span', { class: 'name', title: r.id }, r.name), h('span', { class: 'badge D' }, 'D'),
-      h('button', { class: 'small', onclick: async e => { e.stopPropagation(); await flush(); if (await guard(() => post('/api/revert', { id: r.id }))) { await refresh(); if (findIn(S.st.root, r.id)) await select(r.id); else note('Put back. Its folder was removed too, so put the folder back to see it.'); } } }, 'Put back')));
+      h('button', { class: 'small', onclick: async e => { e.stopPropagation(); if (!(await ready())) return; if (await guard(() => post('/api/revert', { id: r.id }))) { await refresh(); if (findIn(S.st.root, r.id)) await select(r.id); else note('Put back. Its folder was removed too, so put the folder back to see it.'); } } }, 'Put back')));
   }
 }
 
@@ -481,7 +493,7 @@ function renderNodeHead() {
   const head = $('nodehead'), tabs = $('tabs'), n = S.node;
   if (!head || !tabs || !n || !S.st) return;
   const hit = findIn(S.st.root, n.id), live = hit ? hit.node : { name: n.name, path: n.path, status: n.status, scripts: [] }, changed = isChanged(live);
-  const act = async (url, body, then) => { await flush(); const r = await guard(() => post(url, body)); if (r === undefined) return; if (then) await then(r); else await reloadAll(); };
+  const act = async (url, body, then) => { if (!(await ready())) return; const r = await guard(() => post(url, body)); if (r === undefined) return; if (then) await then(r); else await reloadAll(); };
   const remove = h('button', { class: 'small danger', onclick: async () => {
     if (remove.dataset.sure !== '1') { remove.dataset.sure = '1'; remove.textContent = 'Really remove?'; setTimeout(() => { remove.dataset.sure = ''; remove.textContent = 'Remove'; }, 3500); return; }
     const parent = hit && hit.parent ? hit.parent.id : 'collection.js';
@@ -495,17 +507,18 @@ function renderNodeHead() {
     n.kind === 'request' ? h('button', { class: 'small', onclick: () => act('/api/duplicate', { id: n.id }, async r => { await refresh(); await select(r.id, { tab: 'main' }); }) }, 'Duplicate') : null,
     n.kind !== 'collection' ? h('button', { class: 'small', title: 'Move up', 'aria-label': 'Move up', onclick: () => act('/api/move', { id: n.id, by: -1 }) }, '↑') : null,
     n.kind !== 'collection' ? h('button', { class: 'small', title: 'Move down', 'aria-label': 'Move down', onclick: () => act('/api/move', { id: n.id, by: 1 }) }, '↓') : null,
-    changed && n.originalDef ? h('button', { class: 'small', title: 'Put this back to what it was when the collection was unpacked', onclick: async () => { await flush(); for (const id of [n.id, ...n.scripts.filter(s => s.original != null).map(s => s.file)]) if ((await guard(() => post('/api/revert', { id }))) === undefined) break; await reloadAll(); } }, 'Revert') : null,
+    changed && n.originalDef ? h('button', { class: 'small', title: 'Put this back to what it was when the collection was unpacked', onclick: async () => { if (!(await ready())) return; for (const id of [n.id, ...n.scripts.filter(s => s.original != null).map(s => s.file)]) if ((await guard(() => post('/api/revert', { id }))) === undefined) break; await reloadAll(); } }, 'Revert') : null,
     n.kind !== 'collection' ? remove : null);
   const labels = [['main', n.kind === 'request' ? 'Request' : n.kind === 'folder' ? 'Folder' : 'Collection', live.status === 'modified'], ['scripts', `Scripts (${live.scripts.length})`, live.scripts.some(s => s.status !== 'same')]]
     .concat(n.kind === 'collection' ? [] : [['inherited', 'Inherited', false]], [['changes', 'Changes', changed], ['raw', 'Raw', false]]);
   tabs.textContent = '';
-  for (const [id, label, dot] of labels) tabs.append(h('button', { role: 'tab', 'aria-selected': String(S.tab === id), onclick: async () => { await flush(); S.tab = id; S.focus = null; renderNodeHead(); renderTab(); } }, label, dot ? h('span', { class: 'dot', title: 'changed' }) : null));
+  for (const [id, label, dot] of labels) tabs.append(h('button', { role: 'tab', 'aria-selected': String(S.tab === id), onclick: async () => { if (!(await ready())) return; S.tab = id; S.focus = null; renderNodeHead(); renderTab(); } }, label, dot ? h('span', { class: 'dot', title: 'changed' }) : null));
 }
 function renderTab() {
   const body = $('tabbody'), n = S.node;
   if (!body || !n) return;
   body.textContent = '';
+  S.leave = null; S.rawDirty = false; showSaved();
   if (S.tab === 'scripts') tabScripts(body);
   else if (S.tab === 'inherited') tabInherited(body);
   else if (S.tab === 'changes') tabChanges(body);
@@ -698,13 +711,13 @@ function tabScripts(body) {
     const fails = run ? run.assertions.filter(a => a.result === 'FAIL' && a.file === s.file) : [];
     body.append(h('div', { class: 'card' },
       h('div', { class: 'scripthead' }, h('h2', {}, LISTEN[s.listen] || s.listen), h('span', { class: 'fname' }, s.file), h('span', { class: 'grow' }),
-        s.original != null ? h('button', { class: 'small', title: 'Put this script back to what it was when the collection was unpacked', onclick: async () => { await flush(); if (await guard(() => post('/api/revert', { id: s.file }))) await reloadAll(); } }, 'Revert script') : h('span', { class: 'badge A' }, 'new')),
+        s.original != null ? h('button', { class: 'small', title: 'Put this script back to what it was when the collection was unpacked', onclick: async () => { if (!(await ready())) return; if (await guard(() => post('/api/revert', { id: s.file }))) await reloadAll(); } }, 'Revert script') : h('span', { class: 'badge A' }, 'new')),
       ed, info,
       fails.map(a => h('div', { class: 'msg bad' }, h('button', { class: 'link', onclick: () => ed.goTo(a.line) }, `line ${a.line}`), `  failed in the last run: ${a.name} — ${a.message}`))));
   }
   if (!n.scripts.length) body.append(h('div', { class: 'empty' }, 'No scripts here yet.'));
   const missing = ['prerequest', 'test'].filter(l => !n.scripts.some(s => s.listen === l));
-  if (missing.length) body.append(h('div', { class: 'line' }, missing.map(l => h('button', { onclick: async () => { await flush(); if (await guard(() => post('/api/add-script', { id: n.id, listen: l }))) await reloadAll(); } }, '+ Add ' + (l === 'test' ? 'tests' : 'a pre-request script')))));
+  if (missing.length) body.append(h('div', { class: 'line' }, missing.map(l => h('button', { onclick: async () => { if (!(await ready())) return; if (await guard(() => post('/api/add-script', { id: n.id, listen: l }))) await reloadAll(); } }, '+ Add ' + (l === 'test' ? 'tests' : 'a pre-request script')))));
   if (S.focus && S.focus.file) { const ed = [...body.querySelectorAll('.editor')].find(e => e.dataset.file === S.focus.file); if (ed) ed.goTo(S.focus.line || 1); S.focus = null; }
 }
 
@@ -742,13 +755,18 @@ async function tabChanges(body) {
 }
 function tabRaw(body) {
   const n = S.node;
-  let text = JSON.stringify(n.def, null, 2);
-  const apply = async () => { await flush(); if ((await guard(() => post('/api/def', { id: n.id, text: ed.ta.value }))) !== undefined) { note('Applied.', 'good'); await reloadAll(); } };
-  const ed = codeEditor(text, v => { text = v; button.disabled = false; }, { label: 'Definition as JSON', min: 10, max: 40 });
+  const write = async () => {                     // true when the text is in the file
+    if ((await guard(() => post('/api/def', { id: n.id, text: ed.ta.value }))) === undefined) return false;
+    S.rawDirty = false; button.disabled = true; showSaved();
+    return true;
+  };
+  const apply = async () => { await flush(); if (await write()) { S.leave = null; note('Applied.', 'good'); await reloadAll(); } };
+  const ed = codeEditor(JSON.stringify(n.def, null, 2), () => { S.rawDirty = true; button.disabled = false; showSaved(); }, { label: 'Definition as JSON', min: 10, max: 40 });
   const button = h('button', { class: 'primary', disabled: true, onclick: apply }, 'Apply');
-  ed.ta.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); apply(); } });
+  S.leave = async () => !S.rawDirty || write();
+  ed.ta.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); e.stopPropagation(); apply(); } });
   body.append(h('div', { class: 'hint' }, 'Everything about this ' + (n.kind === 'collection' ? 'collection' : n.kind) + ' as it is kept in ', h('code', {}, n.id), '. ', h('code', {}, '{"$script": "file"}'), ' stands for a script kept in its own file', n.kind === 'request' ? '.' : h('span', {}, ', ', h('code', {}, '{"$children": [...]}'), ' for the requests and folders inside, in order.')),
-    ed, h('div', { class: 'line' }, button, h('span', { class: 'hint' }, 'Apply (or Ctrl+S) writes this to the file.')));
+    ed, h('div', { class: 'line' }, button, h('span', { class: 'hint' }, 'Apply (or Ctrl+S) writes this to the file. So does leaving this tab.')));
   if (S.focus && S.focus.text) { const lines = ed.ta.value.split('\n'), at = lines.findIndex(l => l.toLowerCase().includes(S.focus.text.toLowerCase())); ed.goTo(at < 0 ? 1 : at + 1); S.focus = null; }
 }
 
@@ -775,7 +793,7 @@ async function viewPreview(main) {
   const p = await guard(() => get('/api/preview'));
   if (!p || token !== S.token) return;
   if (p.errors.length) { main.append(h('div', { class: 'banner bad', role: 'alert' }, 'Pack would be refused:\n' + p.errors.join('\n'))); return; }
-  if (p.onto) main.append(h('div', { class: 'banner warn' }, `${st.collection} was changed by something else since it was unpacked (a merge, perhaps). Pack merges the edits from the files into it and then writes the files again from the result.`));
+  if (p.onto) main.append(h('div', { class: 'banner warn' }, `${st.collection} was changed by something else since it was unpacked (a merge, perhaps). ` + (p.held ? 'It already holds every edit from the files. Pack writes the files again from it.' : 'Pack merges the edits from the files into it and then writes the files again from the result.')));
   if (!p.added && !p.removed) { main.append(h('div', { class: 'empty' }, 'The collection JSON would not change.')); return; }
   main.append(h('div', { class: 'hint' }, `+${p.added} −${p.removed} lines against ${p.onto ? 'the file as it is now' : 'the version that was unpacked'}; ${p.how}. Every other line of the file stays byte for byte as it is.`), diffTable(p.lines, S.diffMode));
 }
@@ -812,16 +830,16 @@ async function viewSearch(main) {
 
 /* ---------- pack and run ---------- */
 async function pack() {
-  await flush();
+  if (!(await ready())) return;
   const r = await guard(() => post('/api/pack'));
   if (!r) return;
   if (r.errors.length) { note('Pack was refused:\n' + r.errors.join('\n'), 'bad'); S.view = 'preview'; }
-  else note(`Packed into ${S.st.collection}: +${r.added} −${r.removed} lines (${r.how}).` + (r.onto ? '\nThe files were written again from the merged result.' : ''), 'good');
+  else note(r.held ? `${S.st.collection} had changed and already held every edit. The files were written again from it.` : `Packed into ${S.st.collection}: +${r.added} −${r.removed} lines (${r.how}).` + (r.onto ? '\nThe files were written again from the merged result.' : ''), 'good');
   await reloadAll(); renderHeader();
 }
 async function runTests(id) {
   if (S.running) return;
-  await flush();
+  if (!(await ready())) return;
   S.running = true; renderHeader(); if (S.view === 'run') renderMain();
   let r;
   try { r = await post('/api/test', id ? { id } : {}); } catch (e) { note(e.message, 'bad'); }
@@ -847,13 +865,14 @@ document.addEventListener('keydown', e => {
   if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) { e.preventDefault(); $('filter').focus(); }
 });
 window.addEventListener('focus', async () => {            // the files may have been edited by hand meanwhile
-  if (saves.size || busy || S.running || !S.st) return;
+  if (saves.size || busy || S.running || S.rawDirty || !S.st) return;
   await refresh();
-  if (S.view !== 'node' || !S.node || saves.size || busy) return;
+  if (S.view !== 'node' || !S.node || saves.size || busy || S.rawDirty) return;
   const fresh = await get('/api/node', { id: S.sel }).catch(() => null);
   if (fresh && (JSON.stringify(fresh.def) !== JSON.stringify(S.node.def) || fresh.scripts.some((s, i) => !S.node.scripts[i] || s.text !== S.node.scripts[i].text) || fresh.scripts.length !== S.node.scripts.length)) { S.node = fresh; renderMain(); }
 });
 window.addEventListener('pagehide', () => { flush(); });
+window.addEventListener('beforeunload', e => { if (S.rawDirty) { e.preventDefault(); e.returnValue = ''; } });
 (async () => { showSaved(); renderTreebar(); await refresh(); if (S.st) { await loadNode(); renderMain(); } })();
 </script>
 </body>
