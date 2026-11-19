@@ -945,7 +945,7 @@ guards on every pack: only script lines you changed differ in the collection, wh
 edits are dropped, syntax errors and removed pm.test() calls are refused.
 
 experimental (needs pmx-tree.js next to this file; see its --help):
-  tree unpack | pack | check   the whole collection as files: requests, folders, variables and scripts`;
+  tree unpack | pack | test | check   the whole collection as files: requests, folders, variables and scripts`;
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);

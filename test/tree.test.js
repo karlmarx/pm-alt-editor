@@ -273,7 +273,7 @@ async function main() {
   assert.ok(fs.readFileSync(path.join(d7, 'Demo.postman_collection.json')).equals(before7));
   assert.strictEqual(pmx(d7, 'tree', 'pack').code, 0);
   assert.ok(fs.readFileSync(path.join(d7, 'Demo.postman_collection.json')).equals(before7));
-  assert.match(pmx(d7, 'help').out, /tree unpack \| pack \| check/);
+  assert.match(pmx(d7, 'help').out, /tree unpack \| pack \| test \| check/);
   assert.strictEqual(pmx(d7, 'tree').code, 0);
   ok('unpack, ls, status and pack work as before next to a tree, and both modes leave an unedited collection byte-identical');
 
