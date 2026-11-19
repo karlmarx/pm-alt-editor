@@ -33,6 +33,14 @@ const safe = s => String(s).replace(/[^A-Za-z0-9.]+/g, '_').replace(/^[_.]+|[_.]
 const setKey = (o, k, v) => { if (k === '__proto__') Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true }); else o[k] = v; };
 const show = v => (v === undefined ? '(not present)' : clip(JSON.stringify(v), 140));
 class Fail extends Error {}
+/* Write a file in a way repository content cannot redirect. The temporary name is random and is created with "wx"
+ * (fail if anything is already there), so a branch cannot plant a link at a known temp path; the final rename replaces
+ * whatever is at the target, a link included, instead of writing through it. */
+function writeSafe(file, text) {
+  const tmp = `${file}.${crypto.randomBytes(8).toString('hex')}.treemerge-tmp`;
+  fs.writeFileSync(tmp, text, { flag: 'wx' });
+  fs.renameSync(tmp, file);
+}
 const die = m => { throw new Fail(m); };
 const SELF = 'node ' + (rel(__filename).includes(' ') ? JSON.stringify(rel(__filename)) : rel(__filename));
 
@@ -485,9 +493,20 @@ function explicitInputs(file, o) {
   return { mode: 'explicit', base: base === '' ? null : base, ours: o.ours ? readSpec(o.ours, file) : readFile(file), theirs: readSpec(o.theirs, file),
     labels: { ours: o.ours && !isFile(o.ours) ? o.ours : 'ours', theirs: isFile(o.theirs) ? 'theirs' : o.theirs } };
 }
+/* The scratch folder holds remembered decisions, and treemerge replays them. It therefore must be ours alone: a folder
+ * that git tracks (a merged branch can deliver one, decisions included) or that is really a link to somewhere else is refused. */
+let scratchChecked = null;
+function guardScratch(root) {
+  if (scratchChecked === root) return;
+  const st = fs.lstatSync(root, { throwIfNoEntry: false });
+  if (st && !st.isDirectory()) die(`${rel(root)} is not a plain folder. treemerge keeps its notes there: remove it and run again.`);
+  if (gitText(['ls-files', '--', root])) die(`${rel(root)}/ is tracked by git in this repository (a merged branch may have brought it in).\ntreemerge will not use decisions it did not record itself. Take the folder out of git and delete it:\n  git rm -r -q --cached ${rel(root)} && rm -rf ${rel(root)}\nthen run treemerge again.`);
+  scratchChecked = root;
+}
 function sessionDir(file) {
   const top = gitText(['rev-parse', '--show-toplevel']) || process.cwd();
   const root = path.join(top, '.treemerge');
+  guardScratch(root);
   if (!fs.existsSync(root)) {
     fs.mkdirSync(root, { recursive: true });
     const ex = gitText(['rev-parse', '--git-path', 'info/exclude']);                              // keep our scratch folder out of `git status` without touching .gitignore
@@ -501,9 +520,9 @@ function openDoc(file, inp, o) {
   const id = sha([inp.base == null ? '' : inp.base, inp.ours, inp.theirs].join('\u0000')), sf = path.join(doc.dir, 'session.json');
   if (!fs.existsSync(sf) || JSON.parse(fs.readFileSync(sf, 'utf8')).id !== id || o.reset) {
     fs.rmSync(doc.dir, { recursive: true, force: true }); fs.mkdirSync(doc.dir, { recursive: true });
-    fs.writeFileSync(path.join(doc.dir, 'ours'), inp.ours); fs.writeFileSync(path.join(doc.dir, 'theirs'), inp.theirs);
-    if (inp.base != null) fs.writeFileSync(path.join(doc.dir, 'base'), inp.base);
-    fs.writeFileSync(sf, JSON.stringify({ id, mode: inp.mode, labels: inp.labels, file: rel(doc.file) }));
+    writeSafe(path.join(doc.dir, 'ours'), inp.ours); writeSafe(path.join(doc.dir, 'theirs'), inp.theirs);
+    if (inp.base != null) writeSafe(path.join(doc.dir, 'base'), inp.base);
+    writeSafe(sf, JSON.stringify({ id, mode: inp.mode, labels: inp.labels, file: rel(doc.file) }));
   }
   const cf = path.join(doc.dir, 'choices.json');
   doc.choices = fs.existsSync(cf) ? JSON.parse(fs.readFileSync(cf, 'utf8')) : {};
@@ -529,7 +548,7 @@ function runDoc(doc) {
     } });
   return doc.r;
 }
-function saveChoices(doc) { fs.writeFileSync(path.join(doc.dir, 'choices.json'), JSON.stringify(doc.choices, null, 1)); }
+function saveChoices(doc) { writeSafe(path.join(doc.dir, 'choices.json'), JSON.stringify(doc.choices, null, 1)); }
 function writeConflictFiles(doc) {                                    // for people and agents who would rather edit a file
   const dir = path.join(doc.dir, 'conflicts'), genFile = path.join(dir, '.generated.json');
   const gen = fs.existsSync(genFile) ? JSON.parse(fs.readFileSync(genFile, 'utf8')) : {};
@@ -539,11 +558,11 @@ function writeConflictFiles(doc) {                                    // for peo
     e.file = f;
     if (fs.existsSync(f)) continue;
     fs.mkdirSync(dir, { recursive: true });
-    const body = e.marked.join('\n'); fs.writeFileSync(f, body); gen[path.basename(f)] = sha(body);
+    const body = e.marked.join('\n'); writeSafe(f, body); gen[path.basename(f)] = sha(body);
   }
-  if (Object.keys(gen).length) fs.writeFileSync(genFile, JSON.stringify(gen));
+  if (Object.keys(gen).length) writeSafe(genFile, JSON.stringify(gen));
 }
-function writeOut(doc) { if (doc.preview) return; const tmp = doc.out + '.treemerge-tmp'; fs.writeFileSync(tmp, doc.r.text); fs.renameSync(tmp, doc.out); }
+function writeOut(doc) { if (!doc.preview) writeSafe(doc.out, doc.r.text); }
 /* choice coming from a UI: {side} | {hunk, pick} | {text} | {value} | {reset} */
 function applyChoice(doc, key, c) {
   const e = doc.r.entries.find(x => x.key === key);
@@ -606,10 +625,10 @@ async function tui(docs) {
   const tty = process.stdout.isTTY, col = (c, s) => (tty ? `\x1b[${c}m${s}\x1b[0m` : s);
   const block = (title, color, lines) => { console.log(col(color, `  ${title}`)); (lines.length ? lines.slice(0, 40) : ['(nothing)']).forEach(l => console.log(col(color, '  | ') + l)); if (lines.length > 40) console.log(col(color, `  | ... ${lines.length - 40} more lines`)); };
   const editor = (text, ext) => {
-    const f = path.join(os.tmpdir(), `treemerge-${process.pid}.${ext}`); fs.writeFileSync(f, text);
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'treemerge-')), f = path.join(tmpDir, `block.${ext}`); fs.writeFileSync(f, text, { flag: 'wx' });
     const ed = process.env.VISUAL || process.env.EDITOR || (process.platform === 'win32' ? 'notepad' : 'vi');
     spawnSync(ed, [f], { stdio: 'inherit', shell: true });
-    const out = fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n'); fs.rmSync(f, { force: true }); return out;
+    const out = fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n'); fs.rmSync(tmpDir, { recursive: true, force: true }); return out;
   };
   const rd = lineReader(), skipped = new Set();
   try {
@@ -668,14 +687,17 @@ function serve(docs, o) {
   return new Promise((resolve, reject) => {
     const send = (res, code, body, type) => { const b = typeof body === 'string' ? body : JSON.stringify(body); res.writeHead(code, { 'content-type': type || 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); res.end(b); };
     const server = http.createServer((req, res) => {
-      const u = new URL(req.url, 'http://x'), host = String(req.headers.host || '').replace(/:\d+$/, '');
+      let u;
+      try { u = new URL(req.url, 'http://x'); } catch (e) { return send(res, 400, { error: 'bad request' }); }
+      const host = String(req.headers.host || '').replace(/:\d+$/, '');
       if (host !== '127.0.0.1' && host !== 'localhost') return send(res, 403, { error: 'local only' });
       if (u.pathname === '/' && req.method === 'GET') return u.searchParams.get('k') === token ? send(res, 200, fs.readFileSync(page, 'utf8'), 'text/html; charset=utf-8') : send(res, 403, 'open the link printed in the terminal', 'text/plain');
       if (u.searchParams.get('k') !== token) return send(res, 403, { error: 'bad token' });
-      let raw = '';
-      req.on('data', c => { raw += c; if (raw.length > 5e7) req.destroy(); });
+      const parts = []; let size = 0;                    // bytes, decoded once at the end: a character split across two chunks must survive
+      req.on('data', c => { parts.push(c); size += c.length; if (size > 5e7) req.destroy(); });
       req.on('end', () => {
         try {
+          const raw = Buffer.concat(parts).toString('utf8');
           const body = raw ? JSON.parse(raw) : {}, doc = docs[+u.searchParams.get('i') || 0];
           if (u.pathname === '/api/docs') return send(res, 200, docs.map((d, i) => { const s = summary(d); return { i, file: s.file, open: s.counts.conflict, labels: s.labels, kind: s.kind, profile: s.profile, preview: s.preview }; }));
           if (u.pathname === '/api/doc') return send(res, 200, summary(doc));
@@ -747,7 +769,7 @@ async function cmdMerge(o) {
   else if (mode === 'tui') await tui(docs);
   docs.forEach((d, i) => {
     runDoc(d); writeConflictFiles(d); writeOut(d);
-    fs.writeFileSync(path.join(d.dir, 'REPORT.txt'), fullReport(d));
+    writeSafe(path.join(d.dir, 'REPORT.txt'), fullReport(d));
     if (i) console.log('\n' + '-'.repeat(70) + '\n');
     console.log(report(d));
     if (d.preview) console.log(`\nPREVIEW ONLY - nothing was written. To do it for real: git merge ${d.inp.labels.theirs}   then   ${SELF}`);
@@ -795,7 +817,7 @@ function cmdInstall(o) {
   const pats = o._.length ? o._ : ['*.json'], ga = path.join(top, '.gitattributes');
   let cur = fs.existsSync(ga) ? fs.readFileSync(ga, 'utf8') : '';
   for (const pat of pats) { const line = `${pat} merge=treemerge`; if (!cur.split(/\r?\n/).includes(line)) cur += (cur && !cur.endsWith('\n') ? '\n' : '') + line + '\n'; }
-  fs.writeFileSync(ga, cur);
+  writeSafe(ga, cur);
   console.log(`installed for this clone:\n  - git merge / rebase / cherry-pick now merge ${pats.join(', ')} by structure (see .gitattributes; commit it to share the rule)\n  - \`git mergetool -t treemerge\` opens the interactive view for any conflicted file\n  - each teammate runs \`${SELF} install\` once; to undo: git config --remove-section merge.treemerge`);
   return 0;
 }
