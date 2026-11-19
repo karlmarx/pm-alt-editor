@@ -214,6 +214,40 @@ async function main() {
     await page.click('#nodehead button:has-text("Revert")');
     await settled();
     assert.strictEqual(await page.locator('#pillChanges').innerText(), '1 changed');
+    // what is typed while something else is going on is neither lost nor replaced
+    await page.click(row('Ping'));
+    await settled();
+    await page.waitForTimeout(300);                   // the request is on the page now
+    await page.evaluate(() => {                       // the window gets the focus back, and a key is typed before the page has read the files again
+      window.dispatchEvent(new Event('focus'));
+      const box = document.querySelector('#tabbody input');
+      box.value = 'Ping, typed at once';
+      box.dispatchEvent(new Event('input'));
+    });
+    await settled();
+    await page.waitForTimeout(300);
+    assert.deepStrictEqual([await page.locator('#tabbody input').first().inputValue(), def('Smoke', 'Ping.request.js').name], ['Ping, typed at once', 'Ping, typed at once'], 'coming back to the window replaced what was being typed');
+    await page.click('#tabs button:has-text("Scripts")');
+    await page.waitForSelector('#tabbody textarea.code');
+    await page.click('#btnRun');                                                // typing goes on while newman runs
+    await page.locator('#tabbody textarea.code').focus();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('\n// typed during the run');
+    await page.waitForSelector('main .banner.bad, main .banner.good', { timeout: 60000 });
+    await page.waitForFunction(() => document.getElementById('btnRun').textContent === 'Run tests');
+    await settled();
+    assert.match(read(T('Smoke', 'Ping.test.js')), /\/\/ typed during the run$/, 'what was typed during a test run did not reach the file');
+    await page.click('#btnResults');                                            // back to the request
+    await page.waitForSelector('#tabbody textarea.code');
+    assert.match(await page.locator('#tabbody textarea.code').inputValue(), /\/\/ typed during the run$/, 'the editor shows an older text after a test run');
+    await page.locator('#tabbody textarea.code').focus();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' and after');
+    await settled();
+    assert.match(read(T('Smoke', 'Ping.test.js')), /\/\/ typed during the run and after$/, 'the next key wrote an older text over what was typed during the run');
+    await page.click('#nodehead button:has-text("Revert")');
+    await settled();
+    assert.strictEqual(await page.locator('#pillChanges').innerText(), '1 changed');
     problems.length = 0;                             // the refused saves are reported by the browser as failed requests; those are expected
     ok('an older copy held by the page is not written over the files: after put back in another view, and after a hand edit');
 
@@ -321,6 +355,7 @@ async function main() {
     ok('a variable and a request are added, a request is moved, removed and put back');
 
     // the diffs, then pack: the collection JSON gets the edits and nothing else moves
+    const notYetPacked = read(path.join(dir, 'Demo.postman_collection.json'));   // as the last test run left it
     await page.click(row('Open orders'));
     await page.click('#tabs button:has-text("Changes")');
     await page.waitForSelector('#tabbody table.diff.unified tr.add');
@@ -332,7 +367,8 @@ async function main() {
     assert.deepStrictEqual(await page.locator('main .card h2').allInnerTexts(), ['Demo', 'Smoke', 'Smoke / Version', 'Orders / Open orders']);
     await page.click('#btnPreview');
     await page.waitForSelector('main table.diff');
-    assert.strictEqual(read(path.join(dir, 'Demo.postman_collection.json')), before, 'the collection file changed before Pack');
+    assert.strictEqual(read(path.join(dir, 'Demo.postman_collection.json')), notYetPacked, 'looking at the changes wrote to the collection file');
+    assert.ok(!notYetPacked.includes('pageSize'), 'an edit reached the collection file before Pack');
     await page.click('main button.primary:has-text("Pack")');
     await page.waitForSelector('.note.good:has-text("Packed into")');
     assert.match(await page.locator('.note.good:has-text("Packed into")').innerText(), /Packed into Demo\.postman_collection\.json: \+\d+ .\d+ lines \(layout kept\)/);

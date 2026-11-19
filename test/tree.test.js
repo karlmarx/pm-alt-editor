@@ -449,6 +449,28 @@ async function main() {
   assert.match(read(w.script), /"available"/);
   ok('the collection changed underneath: pack merges the edits from the files into it and refreshes the files; a clash is refused with nothing written; a collection that already holds the edits is followed; an edit made again is taken, an edit taken back stays out, an edit the newer file lacks is kept');
 
+  // two requests of one name in a folder: after a merge the files and what they are compared with still belong together
+  const dn = scratch(), Cn = path.join(dn, 'Demo.postman_collection.json'), Tn = (...parts) => path.join(dn, '.pmx', 'Demo', 'tree', ...parts);
+  makeDemo(dn);
+  const twins = parse(read(Cn)), ping = twins.item[0].item[0];
+  twins.item[0].item = [Object.assign({}, ping, { name: 'Same name', event: [{ listen: 'test', script: { type: 'text/javascript', exec: ['pm.test("one", function () {});\r', 'pm.test("two", function () {});'] } }] }),
+    Object.assign({}, ping, { name: 'Same name', event: [{ listen: 'test', script: { type: 'text/javascript', exec: ['pm.test("only", function () {});'] } }] })];
+  fs.writeFileSync(Cn, JSON.stringify(twins, null, '\t'));
+  assert.strictEqual(pmx(dn, 'tree', 'unpack', 'Demo.postman_collection.json').code, 0);
+  editDef(Tn('Smoke', 'folder.js'), d => { assert.deepStrictEqual(d.item.$children, ['Same_name.request.js', 'Same_name~2.request.js']); d.item.$children.shift(); });   // the first one goes
+  fs.writeFileSync(Cn, read(Cn).replace('"name": "Open orders"', '"name": "Open orders (renamed upstream)"'));
+  r = pmx(dn, 'tree', 'pack');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /merged into the newer collection file/);
+  r = pmx(dn, 'tree', 'status');
+  assert.match(r.out, /no changes against the collection as it was unpacked/);
+  assert.doesNotMatch(r.out, /ERROR|dropped/);
+  const afterTwins = read(Cn);
+  r = pmx(dn, 'tree', 'finish');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(read(Cn), afterTwins, 'finish changed a collection that already held everything');
+  assert.deepStrictEqual(parse(afterTwins).item[0].item.map(i => i.event[0].script.exec.length), [1]);
+
   // 10. nothing is dropped without a word: spacing inside a script, and files that nothing lists
   const dq = scratch(), Cq = path.join(dq, 'Demo.postman_collection.json'), Tq = (...parts) => path.join(dq, '.pmx', 'Demo', 'tree', ...parts);
   makeDemo(dq);
