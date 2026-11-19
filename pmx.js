@@ -35,9 +35,11 @@ function readStrict(file) {
   if (!Buffer.from(text, 'utf8').equals(buf)) die(`${rel(file)} is not valid UTF-8 - refusing to touch it`);
   return text;
 }
+/* Write through a temporary file with a random name, created with "wx" (fail if anything is already there), then rename.
+ * A branch therefore cannot plant a link at a known temp path, and the rename replaces a link instead of writing through it. */
 function writeAtomic(file, text) {
-  const tmp = file + '.pmx-tmp';
-  fs.writeFileSync(tmp, text);
+  const tmp = `${file}.${crypto.randomBytes(8).toString('hex')}.pmx-tmp`;
+  fs.writeFileSync(tmp, text, { flag: 'wx' });
   fs.renameSync(tmp, file);
 }
 
@@ -214,7 +216,7 @@ function mergeScript(orig, curText, opt) {
 
 /* ───────────────────────── context / config ───────────────────────── */
 function parseArgs(argv) {
-  const BOOL = new Set(['force', 'keep-whitespace', 'allow-test-removal', 'failed', 'all', 'rebaseline', 'no-sync', 'quiet', 'open', 'abort', 'reset', 'full', 'write']);
+  const BOOL = new Set(['force', 'keep-whitespace', 'allow-test-removal', 'failed', 'all', 'rebaseline', 'no-sync', 'quiet', 'open', 'abort', 'reset', 'full', 'write', 'ui', 'tui', 'no-ui', 'add', 'no-open', 'help']);
   const o = { _: [], folder: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -227,13 +229,26 @@ function parseArgs(argv) {
   }
   return o;
 }
+/* .pmx/ is replayed into the collection by `pack`, so it must be ours alone: a folder that git tracks (a merged branch
+ * can deliver one) or that is really a link to somewhere else is refused. */
+function guardWork(root) {
+  const st = fs.lstatSync(root, { throwIfNoEntry: false });
+  if (st && !st.isDirectory()) die(`${rel(root)} is not a plain folder. pmx keeps its working files there: remove it and run unpack again.`);
+  const r = spawnSync('git', ['ls-files', '--', root], { encoding: 'utf8' });
+  if (r.status === 0 && r.stdout.trim()) die(`${rel(root)}/ is tracked by git in this repository (a merged branch may have brought it in).\npmx will not pack from files it did not write itself. Add ${rel(root)}/ to .gitignore, take it out of git and delete it:\n  git rm -r -q --cached ${rel(root)} && rm -rf ${rel(root)}\nthen run unpack again.`);
+}
+const inside = (dir, file) => { const r = path.relative(dir, path.resolve(dir, String(file))); return !!r && !r.startsWith('..') && !path.isAbsolute(r); };
 function getCtx(o, collectionArg) {
   const cfg = fs.existsSync('pmx.config.json') ? readJson('pmx.config.json') : {};
   const workRoot = path.resolve(cfg.workDir || '.pmx');
+  guardWork(workRoot);
   let collection = collectionArg || o.collection || cfg.collection;
   if (!collection && fs.existsSync(workRoot)) {
     const mans = fs.readdirSync(workRoot).map(d => path.join(workRoot, d, 'manifest.json')).filter(f => fs.existsSync(f));
-    if (mans.length === 1) collection = readJson(mans[0]).collection;
+    if (mans.length === 1) {
+      collection = readJson(mans[0]).collection;
+      if (typeof collection !== 'string' || !inside(process.cwd(), collection)) die(`${rel(mans[0])} points at a collection outside this folder. It was not written by pmx here: run unpack again.`);
+    }
     else if (mans.length > 1) die('several collections are unpacked - say which one with --collection <file>');
   }
   if (!collection) {                                    // last resort: the one collection file git tracks here
@@ -249,7 +264,11 @@ function getCtx(o, collectionArg) {
 }
 function needManifest(ctx) {
   if (!fs.existsSync(ctx.f('manifest.json'))) die(`not unpacked yet. Run: ${SELF} unpack ${rel(ctx.collection)}`);
-  return readJson(ctx.f('manifest.json'));
+  const man = readJson(ctx.f('manifest.json'));
+  for (const s of man.scripts || []) {
+    if (!inside(ctx.scriptsDir, s.file)) die(`${rel(ctx.f('manifest.json'))} names a script file outside ${rel(ctx.scriptsDir)}/ (${JSON.stringify(s.file)}). It was not written by pmx: run unpack again.`);
+  }
+  return man;
 }
 const loadState = ctx => (fs.existsSync(ctx.f('state.json')) ? readJson(ctx.f('state.json')) : {});
 const saveState = (ctx, st) => fs.writeFileSync(ctx.f('state.json'), JSON.stringify(st, null, 1));
@@ -267,7 +286,12 @@ function cmdUnpack(o) {
   const { root, prefix } = rootOf(json);
   const spans = scanExec(text);
   const scripts = [], items = [], used = new Set();
-  const uniq = f => { let r = f, n = 1; while (used.has(r.toLowerCase())) r = f.replace(/(\.[a-z]+\.js)$/, `~${++n}$1`); used.add(r.toLowerCase()); return r; };
+  const uniq = f => {                                   // "name.test.js" -> "name~2.test.js" when the name is taken; always a new string, whatever the event is called
+    const cut = f.lastIndexOf('.', f.length - 4), at = cut > f.lastIndexOf('/') ? cut : f.length - 3;
+    let r = f, n = 1;
+    while (used.has(r.toLowerCase())) r = `${f.slice(0, at)}~${++n}${f.slice(at)}`;
+    used.add(r.toLowerCase()); return r;
+  };
   const addEvents = (node, p, dir, stem, names) => (Array.isArray(node.event) ? node.event : []).forEach((ev, ei) => {
     if (!ev || !ev.script || ev.script.exec == null) return;
     const key = p.concat('event', ei, 'script', 'exec').join('/');
@@ -633,8 +657,9 @@ function runNewman(ctx, man, o) {
       resolve({ summary, execs, asserts, byId, partial, scope });
     });
     em.on('beforeItem', (e, a) => { if (a && a.item) E(a.cursor).id = a.item.id; });
-    em.on('beforeRequest', (e, a) => { const x = E(a && a.cursor); if (a && a.request && !x.url) x.url = `${a.request.method} ${a.request.url.toString()}`; });
-    em.on('request', (e, a) => { const x = E(a && a.cursor); if (a && a.response && a.request && x.status === undefined && x.url === `${a.request.method} ${a.request.url.toString()}`) x.status = a.response.code; });
+    const own = a => a && a.request && !(a.cursor && a.cursor.scriptId);         // the request itself, not one a script made with pm.sendRequest
+    em.on('beforeRequest', (e, a) => { const x = E(a && a.cursor); if (own(a) && !x.url) x.url = `${a.request.method} ${a.request.url.toString()}`; });
+    em.on('request', (e, a) => { const x = E(a && a.cursor); if (own(a) && a.response && x.status === undefined && x.url === `${a.request.method} ${a.request.url.toString()}`) x.status = a.response.code; });
     em.on('console', (e, a) => { if (!a || !a.messages) return; const line = a.messages.map(fmtArg).join(' '); if (!/is deprecated\. Use /.test(line)) E(a.cursor).logs.push(line); });
     em.on('assertion', (e, a) => { asserts.push({ id: a.item && a.item.id, ref: a.cursor && a.cursor.ref, name: String(a.assertion), skipped: !!a.skipped, error: e ? (e.message || e.name || 'failed') : null }); });
   });
@@ -739,8 +764,12 @@ async function cmdLoop(ctx, o) {
  * Writes ONE static file and nothing else. The page has no JavaScript and loads nothing: its Content-Security-Policy
  * forbids scripts and every network request, and all text that comes from scripts, request names and logs is escaped. */
 const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
-const INVISIBLE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF]/g;
-const codeHtml = s => esc(s).replace(INVISIBLE, c => `<i title="invisible or text-direction character">U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}</i>`);
+/* Characters a reader cannot see, or that change the order text is displayed in: control and format characters (zero-width
+ * characters, direction marks, overrides and isolates, tags), line and paragraph separators, every space other than the
+ * ordinary one, variation selectors, and the letters that render as blanks. Each is shown as U+XXXX, wherever text from
+ * the collection or from a log reaches the page. */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Zs}\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u2065\u2800\u3164\uFE00-\uFE0F\uFFA0\u{E0100}-\u{E01EF}]/gu;
+const codeHtml = s => esc(s).replace(INVISIBLE, c => (c === ' ' || c === '\t' || c === '\n' ? c : `<i title="invisible or text-direction character">U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}</i>`));
 const tokensOf = l => l.match(/\s+|\w+|[^\s\w]/g) || [];
 function wordMarks(a, b) {                       // [htmlA, htmlB] with the changed words marked, or null when the two lines are not alike
   const ta = tokensOf(a), tb = tokensOf(b), ops = diffOps(ta, tb);
@@ -867,12 +896,12 @@ function viewHtml(ctx, r, twins) {
   const changed = r.states.filter(st => st.m.changed);
   const total = k => changed.reduce((n, st) => n + st.m[k], 0);
   const ws = r.changes.reduce((n, c) => n + c.ws, 0);
-  const code = t => `<code>${esc(t)}</code>`, when = ms => esc(new Date(ms).toLocaleString());
+  const code = t => `<code>${codeHtml(t)}</code>`, when = ms => esc(new Date(ms).toLocaleString());
   const pm = m => `<span class="pm"><span class="p">+${m.add}</span> <span class="m">\u2212${m.del}</span></span>`;
   const info = changed.map((st, i) => {
     const names = st.s.names.length ? st.s.names : ['(collection)'];
     return { st, id: 's' + (i + 1), file: rel(st.abs), kind: (/(^|\/)_folder\.[^/]+$/.test(st.s.file) ? 'folder ' : !st.s.names.length ? 'collection ' : '') + st.s.listen,
-      req: `<span class="req">${names.slice(0, -1).map(n => esc(n) + ' / ').join('')}<b>${esc(names[names.length - 1])}</b></span>` };
+      req: `<span class="req">${names.slice(0, -1).map(n => codeHtml(n) + ' / ').join('')}<b>${codeHtml(names[names.length - 1])}</b></span>` };
   });
   const facts = [];
   if (r.errors.length) facts.push(`<li class="bad">Guards refused these edits, so the collection file is not updated:<ul>${r.errors.map(e => `<li>${code(e)}</li>`).join('')}</ul></li>`);
@@ -889,7 +918,7 @@ function viewHtml(ctx, r, twins) {
   if (fs.existsSync(runFile)) {
     const txt = fs.readFileSync(runFile, 'utf8'), at = fs.statSync(runFile).mtimeMs;
     const stale = changed.some(st => fs.statSync(st.abs).mtimeMs > at);
-    facts.push(`<li class="${stale ? 'warnc' : /^RESULT: PASS/.test(txt) ? 'okc' : 'bad'}"><details class="log"><summary><span>Last test run (${when(at)}): ${code(txt.split('\n')[0])}${stale ? ' <b class="warnc">Scripts were edited after this run. Run the tests again.</b>' : ''}</span></summary><pre>${esc(txt)}</pre></details></li>`);
+    facts.push(`<li class="${stale ? 'warnc' : /^RESULT: PASS/.test(txt) ? 'okc' : 'bad'}"><details class="log"><summary><span>Last test run (${when(at)}): ${code(txt.split('\n')[0])}${stale ? ' <b class="warnc">Scripts were edited after this run. Run the tests again.</b>' : ''}</span></summary><pre>${codeHtml(txt)}</pre></details></li>`);
   } else facts.push(`<li><span>No test run recorded yet. Run ${code(SELF + ' test')}.</span></li>`);
   const verdict = r.errors.length ? `<p class="verdict bad">Pack refused: ${r.errors.length} problem(s) to fix</p>`
     : !changed.length ? '<p class="verdict">No script changes since unpack</p>'
@@ -897,7 +926,7 @@ function viewHtml(ctx, r, twins) {
   const cards = info.map(x => {
     const m = x.st.m, before = countTests(m.origN.join('\n')), after = countTests(m.lines.map(l => l.replace(/\r$/, '')).join('\n'));
     const flag = r.errors.some(e => e.includes(x.file));
-    return `<details class="file${flag ? ' flag' : ''}" id="${x.id}" open><summary>${x.req}<span class="tag">${esc(x.kind)}</span>${flag ? '<span class="tag bad">refused</span>' : ''}${pm(m)}</summary>`
+    return `<details class="file${flag ? ' flag' : ''}" id="${x.id}" open><summary>${x.req}<span class="tag">${codeHtml(x.kind)}</span>${flag ? '<span class="tag bad">refused</span>' : ''}${pm(m)}</summary>`
       + `<div class="meta">${code(x.file)} \u00B7 <span${after < before ? ' class="bad"' : ''}>pm.test calls ${before} \u2192 ${after}</span>${m.ws ? ` \u00B7 ${m.ws} whitespace-only edit(s) ignored` : ''}</div>${diffHtml(m)}</details>`;
   }).join('');
   const nav = info.length ? `<nav><h2>Changed scripts</h2>${info.map(x => `<a href="#${x.id}">${x.req}${pm(x.st.m)}</a>`).join('')}</nav>` : '<nav></nav>';
@@ -959,7 +988,14 @@ async function main() {
     case 'test': { const r = await runTest(getCtx(o), o); process.exitCode = r.pass ? 0 : 1; return; }
     case 'loop': process.exitCode = await cmdLoop(getCtx(o), o); return;
     case 'merge': case 'diff': case 'merge-install': {                      // merging lives in treemerge.js; these are shortcuts for the configured collection
-      const cfg = fs.existsSync('pmx.config.json') ? readJson('pmx.config.json') : {}, col = o.collection || cfg.collection;
+      const cfg = fs.existsSync('pmx.config.json') ? readJson('pmx.config.json') : {};
+      let col = o.collection || cfg.collection;
+      if (!col && (cmd === 'diff' || o.theirs || o.ours || o.base) && !o._.some(a => /\.json$/i.test(a))) {   // no file named: use the one collection git tracks here
+        const r = spawnSync('git', ['ls-files', '--', '*postman_collection*.json'], { encoding: 'utf8' });
+        const found = r.status === 0 ? r.stdout.split('\n').filter(Boolean) : [];
+        if (found.length === 1) col = found[0];
+        else if (found.length > 1) die('several collections here - say which one with --collection <file>:\n  ' + found.join('\n  '));
+      }
       const pass = rest.filter((a, i) => a !== '--collection' && rest[i - 1] !== '--collection');
       const args = cmd === 'merge-install' ? ['install', '*.postman_collection.json'] : cmd === 'diff' ? ['diff', ...(col ? [col] : []), ...pass] : [...(col && !o._.length ? [col] : []), ...pass];
       process.exitCode = await require('./treemerge.js').cli(args).catch(e => { console.error('pmx: ' + e.message); return 2; });

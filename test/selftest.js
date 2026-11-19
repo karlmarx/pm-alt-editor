@@ -186,6 +186,28 @@ async function main() {
     assert.strictEqual(r.code, 2);
     assert.match(r.out, /changed by something other than pmx/);
     ok('refuses to overwrite a collection that changed underneath it');
+
+    const helperDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmx-calls-'));
+    fs.writeFileSync(path.join(helperDir, 'H.postman_collection.json'), JSON.stringify({
+      info: { name: 'H', schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json' },
+      item: [{
+        name: 'Main',
+        event: [
+          { listen: 'prerequest', script: { exec: ['pm.sendRequest("http://127.0.0.1:' + PORT + '/health", function () {});'] } },
+          { listen: 'test', script: { exec: ['pm.test("never true", function () { pm.expect(1).to.equal(2); });'] } },
+        ],
+        request: { method: 'GET', header: [], url: 'http://127.0.0.1:' + PORT + '/catalogue' },
+        response: [],
+      }],
+    }, null, '\t'));
+    fs.writeFileSync(path.join(helperDir, 'pmx.config.json'), JSON.stringify({ collection: 'H.postman_collection.json', newman: { timeoutRequest: 10000 } }));
+    const inHelperDir = (...args) => spawnSync(process.execPath, [PMX, ...args], { cwd: helperDir, encoding: 'utf8' });
+    assert.strictEqual(inHelperDir('unpack', 'H.postman_collection.json').status, 0);
+    r = inHelperDir('test');
+    assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, new RegExp('failing calls: GET http://127\\.0\\.0\\.1:' + PORT + '/catalogue -> 200\n'));
+    assert.doesNotMatch(r.stdout, /failing calls:.*\/health/);
+    ok('"failing calls" names the request itself, not a request its pre-request script made');
   } finally {
     api.kill();
   }
@@ -253,6 +275,99 @@ async function main() {
     }
   }
   ok('fuzz: 3000 random scripts with mixed line endings round-trip exactly');
+
+  // ---- Hardening: what an odd collection, or a branch someone else wrote, must not be able to do. ----
+  const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pmx-hard-'));
+  const git = (dir, ...args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: dir, encoding: 'utf8' });
+  const runIn = (dir, ...args) => {
+    const x = spawnSync(process.execPath, [PMX, ...args], { cwd: dir, encoding: 'utf8', timeout: 30000 });
+    return { code: x.status, out: (x.stdout || '') + (x.stderr || '') };
+  };
+  const oneRequest = (name, listen, ...lines) => ({ name, event: [{ listen, script: { type: 'text/javascript', exec: lines } }], request: { method: 'GET', header: [], url: { raw: 'http://127.0.0.1:9/x' } }, response: [] });
+  const tiny = requests => JSON.stringify({ info: { name: 'T', schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json' }, item: requests }, null, '\t');
+  const canLink = (() => { const d = scratch(); try { fs.symlinkSync(d, path.join(d, 'link')); return true; } catch (e) { return false; } })();   // not on every Windows setup
+
+  let dir = scratch();
+  fs.writeFileSync(path.join(dir, 'T.postman_collection.json'), tiny([oneRequest('Same name', 'Test2', 'var a = 1;'), oneRequest('Same name', 'Test2', 'var b = 2;'), oneRequest('Same name', 'Test2', 'var c = 3;')]));
+  r = runIn(dir, 'unpack', 'T.postman_collection.json');
+  assert.strictEqual(r.code, 0, 'unpack did not finish: ' + r.out);
+  assert.deepStrictEqual(fs.readdirSync(path.join(dir, '.pmx', 'T', 'scripts')).sort(), ['Same_name.Test2.js', 'Same_name~2.Test2.js', 'Same_name~3.Test2.js']);
+  fs.writeFileSync(path.join(dir, '.pmx', 'T', 'scripts', 'Same_name~2.Test2.js'), 'var b = 22;');
+  assert.strictEqual(runIn(dir, 'pack').code, 0);
+  assert.deepStrictEqual(JSON.parse(read(path.join(dir, 'T.postman_collection.json'))).item.map(item => item.event[0].script.exec[0]), ['var a = 1;', 'var b = 22;', 'var c = 3;']);
+  ok('same-named requests get different files whatever their event is called (unpack used to hang), and each packs back into its own request');
+
+  dir = scratch();
+  git(dir, 'init', '-q', '-b', 'main', '.');
+  const tinyFile = path.join(dir, 'T.postman_collection.json'), tinyScript = path.join(dir, '.pmx', 'T', 'scripts', 'One.test.js');
+  fs.writeFileSync(tinyFile, tiny([oneRequest('One', 'test', 'var a = 1;')]));
+  assert.strictEqual(runIn(dir, 'unpack', 'T.postman_collection.json').code, 0);
+  const outside = path.join(scratch(), 'outside.txt');
+  fs.writeFileSync(outside, 'keep me');
+  if (canLink) fs.symlinkSync(outside, tinyFile + '.pmx-tmp');                       // where pack used to write its temporary copy
+  fs.writeFileSync(tinyScript, 'var a = 2;');
+  r = runIn(dir, 'pack');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(read(outside), 'keep me', 'pack wrote through a planted link');
+  assert.ok(read(tinyFile).includes('var a = 2;'));
+  const manifestFile = path.join(dir, '.pmx', 'T', 'manifest.json'), manifest = read(manifestFile);
+  const escaping = JSON.parse(manifest);
+  escaping.scripts[0].file = '../../../../escaped-' + path.basename(dir) + '.js';
+  fs.writeFileSync(manifestFile, JSON.stringify(escaping));
+  for (const command of [['restore', '--all'], ['pack'], ['status']]) {
+    r = runIn(dir, ...command);
+    assert.strictEqual(r.code, 2, command.join(' ') + ': ' + r.out);
+    assert.match(r.out, /names a script file outside/);
+  }
+  assert.ok(!fs.existsSync(path.resolve(path.join(dir, '.pmx', 'T', 'scripts'), escaping.scripts[0].file)), 'a file was written outside the scripts folder');
+  fs.writeFileSync(manifestFile, manifest);
+  assert.strictEqual(runIn(dir, 'status').code, 0);
+  git(dir, 'add', '-f', '.pmx');                                                     // what a merged branch that tracks .pmx/ leaves behind
+  r = runIn(dir, 'status');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /\.pmx\/ is tracked by git/);
+  git(dir, 'rm', '-r', '-q', '--cached', '.pmx');
+  assert.strictEqual(runIn(dir, 'status').code, 0);
+  if (canLink) {
+    fs.renameSync(path.join(dir, '.pmx'), path.join(dir, 'elsewhere'));
+    fs.symlinkSync(path.join(dir, 'elsewhere'), path.join(dir, '.pmx'));
+    r = runIn(dir, 'status');
+    assert.strictEqual(r.code, 2, r.out);
+    assert.match(r.out, /is not a plain folder/);
+  }
+  ok('pack does not write through a planted link; a work folder that git tracks, that is a link, or whose manifest points outside is refused');
+
+  dir = scratch();
+  git(dir, 'init', '-q', '-b', 'main', '.');
+  spawnSync(process.execPath, [path.join(ROOT, 'demo', 'make-demo.js'), dir]);
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-qm', 'one');
+  const demoFile = path.join(dir, 'Demo.postman_collection.json');
+  fs.writeFileSync(demoFile, must(read(demoFile), '\\"paperback\\", \\"ebook\\"', '\\"paperback\\"'));
+  git(dir, 'commit', '-qam', 'two');
+  r = runIn(dir, 'diff', 'HEAD~1');                                                  // no pmx.config.json: the one tracked collection is used
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /Catalogue \/ Genres and formats\n {2}~ test script: \+1 -1 lines/);
+  r = runIn(dir, 'merge', '--theirs', 'HEAD~1', '--no-ui');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /CONFLICTS: none/);
+  for (const flag of ['--no-ui', '--tui', '--ui', '--no-open', '--add']) assert.doesNotMatch(runIn(dir, 'merge', flag, '--help').out, /needs a value/, flag);
+  assert.match(runIn(dir, 'merge', '--no-ui').out, /nothing to merge/);
+  ok('pmx merge passes treemerge its own switches, and diff / merge --theirs find the collection without a config file');
+
+  dir = scratch();
+  const hidden = [0x202E, 0x3164, 0x061C, 0xFE0F, 0x00A0, 0xE0041, 0x200B].map(cp => String.fromCodePoint(cp));
+  fs.writeFileSync(path.join(dir, 'T.postman_collection.json'), tiny([oneRequest('Pay' + hidden[0] + 'load' + hidden[1], 'test', 'var a = 1;')]));
+  assert.strictEqual(runIn(dir, 'unpack', 'T.postman_collection.json').code, 0);
+  fs.writeFileSync(path.join(dir, '.pmx', 'T', 'scripts', 'Pay_load.test.js'), 'var a = 1;\nvar b = "' + hidden.join('x') + '";');
+  assert.strictEqual(runIn(dir, 'view').code, 0);
+  const hiddenPage = read(path.join(dir, '.pmx', 'T', 'diff.html'));
+  for (const ch of hidden) {
+    const label = '>U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0') + '<';
+    assert.ok(!hiddenPage.includes(ch) && hiddenPage.includes(label), 'not marked: ' + label);
+  }
+  assert.ok(count(hiddenPage, '>U+202E<') >= 3, 'the request name is marked in the list, in the heading and in the script');
+  ok('view marks invisible and direction-changing characters in script lines and in request names');
 
   fs.rmSync(work, { recursive: true, force: true });
   console.log(`\nall ${passed} checks passed`);

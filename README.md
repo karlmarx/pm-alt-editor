@@ -346,6 +346,7 @@ Run every command from the repo root.
 | `NEW: this passed before your edits` | Your edit broke a test that was passing. | Undo that part of the edit. |
 | `TESTS THAT STOPPED RUNNING` | A test that ran in the first run no longer runs at all. | Bring it back. If the removal is intended, a human re-runs with `--rebaseline`. |
 | `whitespace-only line edit(s) ignored` | Re-indenting and similar edits were dropped so the diff stays small. | Nothing. Use `--keep-whitespace` if the whitespace change was the point. |
+| `.pmx/ is tracked by git` | The scratch folder came in through git, for example with a merged branch. pmx does not pack from files it did not write itself. | Run the two commands it prints, then `unpack` again. |
 | `was changed by something other than pmx` | The collection file changed since `unpack` (a pull, a Postman export). | Run `unpack` again. If you still have edits that are not in the collection, it stops and asks for `--force`, which discards them. Copy those `.js` files somewhere first and re-apply the edits afterwards. |
 
 ### Let an AI assistant make the edit
@@ -376,7 +377,7 @@ With any other assistant, give it the rules and procedure from `claude/postman-f
 | `pack` | Write edits into the collection (`test` does this for you) |
 | `restore <file>` / `restore --all` | Throw away edits |
 | `loop --why "..." [--model haiku] [--max 4]` | The automated fix loop |
-| `merge` / `diff` / `merge-install` | Shortcuts to treemerge for the configured collection. treemerge's own mode flags (`--ui`, `--tui`, `--no-ui`) are not passed through yet; run `treemerge.js` directly to use them |
+| `merge` / `diff` / `merge-install` | Shortcuts to treemerge for the collection: the configured one, or the only one git tracks. treemerge's own switches, such as `--no-ui`, pass through |
 
 Human-only overrides: `--keep-whitespace`, `--allow-test-removal`, `--rebaseline`, `--force`.
 
@@ -408,7 +409,7 @@ Copy the files you want into your repo, side by side (for example `tools/`). Run
 |---|---|---|
 | treemerge | `treemerge.js`, `treemerge.ui.html` | Nothing. Its scratch folder `.treemerge/` is hidden from git automatically. |
 | pmx | `pmx.js` | newman, a `pmx.config.json`, and `.pmx/` in `.gitignore`. The steps are under [Setup (once per repo)](#setup-once-per-repo). |
-| pmx `merge` / `diff` / `merge-install` | `pmx.js` next to the two treemerge files | For `diff` and `merge --theirs`: a `collection` in `pmx.config.json`, or `--collection <file>`. |
+| pmx `merge` / `diff` / `merge-install` | `pmx.js` next to the two treemerge files | Nothing more. If the repo has several collections, name one with `--collection <file>` or in `pmx.config.json`. |
 
 In Claude Code, copy `claude/*.md` to `.claude/agents/`: `merge-resolver` settles merge conflicts, `postman-fixer` fixes failing assertions. Both are written for a small model.
 
@@ -422,11 +423,13 @@ In Claude Code, copy `claude/*.md` to `.claude/agents/`: `merge-resolver` settle
 | `treemerge`, and pmx `merge` / `diff` / `merge-install` | No outside calls. They read the versions git already holds and write the merged file. |
 | The `merge-resolver` agent | Sends the conflict blocks it resolves to the Claude model you run it with. Same rule as above. |
 
-The pmx `view` page is one static file. It contains no JavaScript, loads no fonts, images or other files, and carries a Content-Security-Policy that blocks scripts and every network request. Text from your scripts is escaped. In script lines, the common invisible and text-direction characters (control characters, zero-width spaces and joiners, direction marks, overrides and isolates) are shown as `U+XXXX`. Rarer blank characters, such as Hangul fillers and variation selectors, are not marked yet. Nothing listens on a port.
+The pmx `view` page is one static file. It contains no JavaScript, loads no fonts, images or other files, and carries a Content-Security-Policy that blocks scripts and every network request. Text from your scripts, request names and the test log is escaped. Characters that cannot be seen, or that change the direction text is shown in, are displayed as `U+XXXX`: control and format characters, unusual spaces, variation selectors and blank filler letters. Nothing listens on a port.
 
 The treemerge browser view is the one thing that does listen on a port. It is served by a small server inside treemerge that accepts connections from your own machine only (`127.0.0.1`), on a random free port, and answers only requests that carry the secret key in the link it prints. It rejects requests addressed to any other host name, and it stops when you choose **Save & close** or press Ctrl+C. `--tui` and `--no-ui` start no server.
 
 `treemerge install` changes this clone only: it adds a merge driver and a mergetool to the clone's git config and writes the file patterns to `.gitattributes`.
+
+Both tools treat their scratch folders (`.pmx/` and `.treemerge/`) as private. They stop if git tracks the folder or if it is a link to somewhere else, so a branch you merge cannot hand them prepared decisions or file names. They write every file through a temporary file with a random name, so a link planted in the repository cannot redirect a write.
 
 `.pmx/` holds a full copy of the collection, the last run's output and the diff page. Keep it out of git (step 4 of the pmx setup) and treat `diff.html` like source code if you send it to someone.
 
@@ -442,4 +445,4 @@ npm install
 npm test
 ```
 
-34 end-to-end checks: pmx against a demo collection and a mock API (18, including byte-identical round trips for 8 export shapes), and treemerge on its own, through real `git merge` runs, in the terminal, and over the browser UI's API (16, including 1,500 random documents).
+42 end-to-end checks: pmx against a demo collection and a mock API (23, including byte-identical round trips for 8 export shapes), and treemerge on its own, through real `git merge` runs, in the terminal, and over the browser UI's API (19, including 1,500 random documents).
