@@ -1028,6 +1028,15 @@ async function main() {
     assert.strictEqual(r.code, 2, args.join(' ') + ': ' + r.out);
     assert.match(r.out, pattern, args.join(' '));
   }
+  fs.rmSync(Tv('Smoke', 'mine.bin'));                                                          // a request taken off its folder's list by hand: its files are leftovers, although the last commit has them
+  git(dv, 'add', '-A'); git(dv, 'commit', '-qm', 'import');
+  editDef(Tv('Smoke', 'folder.js'), d => { d.item.$children = d.item.$children.filter(c => c !== 'Ping.request.js'); });
+  assert.strictEqual(pmx(dv, 'tree', 'build').code, 0);
+  r = pmx(dv, 'tree', 'verify');
+  assert.strictEqual(r.code, 1, r.out);
+  assert.match(r.out, /Smoke\/Ping\.request\.js: no definition lists this file/);
+  git(dv, 'checkout', '-q', '--', '.');
+  assert.strictEqual(pmx(dv, 'tree', 'verify').code, 0);
   if (process.platform !== 'win32') {                                                          // the generated file has become a link: nothing is read or written through it
     const elsewhereV = path.join(os.tmpdir(), 'link-' + path.basename(dv) + '.json'), realV = read(Cv);
     fs.writeFileSync(elsewhereV, realV);
