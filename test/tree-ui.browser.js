@@ -309,7 +309,9 @@ async function main() {
     await page.waitForSelector(row('Twice'));
     await settled();
     assert.strictEqual(await page.locator(row('Twice')).count(), 1, 'a double click on Add made two requests');
-    await page.click('#nodehead button:has-text("Remove")');
+    await page.dblclick('#nodehead button:has-text("Remove")');                 // a double click asks, it does not answer
+    await page.waitForTimeout(400);
+    assert.deepStrictEqual([await page.locator(row('Twice')).count(), await page.locator('#nodehead button.danger').innerText()], [1, 'Really remove?'], 'a double click on Remove removed at once');
     await page.waitForTimeout(700);
     await page.click('#nodehead button:has-text("Really remove?")');
     await settled();
@@ -320,7 +322,7 @@ async function main() {
     fs.rmSync(T('Smoke', 'Ping.prerequest.js'));
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     await page.waitForSelector('main .banner.warn', { state: 'detached' });
-    ok('a double click on Add adds one request; a file that no definition lists is pointed out');
+    ok('a double click on Add adds one request, a double click on Remove only asks; a file that no definition lists is pointed out');
 
     // variables, new requests, order, put back
     await page.click(row('Demo'));
