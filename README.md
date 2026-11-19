@@ -390,6 +390,56 @@ When something needs attention, the top of the page says so. Here a guard refuse
 
 ![The top of the view page reporting a refused pack, twin code and a stale test run](docs/view-problems.png)
 
+## Experimental: the whole collection as files
+
+`pmx unpack` turns only the scripts into files. `pmx tree` is a separate, experimental mode that does it for everything: each request, each folder and the collection itself get a small definition file, next to the same plain `.js` script files. It is a trial of the collection-as-code idea. Every other command works as before.
+
+```bash
+node tools/pmx.js tree unpack path/to/Your.postman_collection.json
+```
+
+Edit the files under `.pmx/<name>/tree/`, then build the collection from them and let newman check it:
+
+```bash
+node tools/pmx.js tree test
+```
+
+| Command | Does |
+|---|---|
+| `tree unpack <collection.json>` | Write every request, folder and script as its own file under `.pmx/<name>/tree/` |
+| `tree pack` | Build the collection from the files. Only what changed moves in the JSON |
+| `tree test [--environment <file>]` | Pack, then run newman on the result, optionally with a Postman environment file |
+| `tree check <collection.json> [--run]` | Measure the round trip: unpack, build, compare with the original. `--run` also compares newman results |
+
+The files for the demo collection:
+
+```text
+collection.js                      variables, auth and the other fields of the collection itself
+collection.prerequest.js           the script that runs before every request
+Catalogue/folder.js                a folder's own fields, and the order of what is in it
+Catalogue/Genres_and_formats.request.js    one request: name, method, URL, headers, body
+Catalogue/Genres_and_formats.test.js       that request's test script, as plain JavaScript
+Catalogue/Staff_picks/folder.js
+...
+```
+
+A definition file is `module.exports = ` followed by JSON. Two markers stand in for what lives in other files: `{"$script": "Ping.test.js"}` where a script's lines go, and `{"$children": ["Ping.request.js", "Staff_picks/"]}` where a folder's content goes, in order.
+
+Through these files you can:
+
+- change a URL, a header, a body, auth or a variable;
+- edit the collection-level and folder-level scripts that many requests share;
+- add a request (write its file and list it in `$children`), remove one, reorder or rename requests and folders.
+
+`tree pack` applies the same guards as `pack` (syntax errors and removed `pm.test` calls are refused) and writes the collection in its own layout, so the diff holds only what you changed.
+
+What this trial does not do yet:
+
+- Definition files are read as data and never run, so the part after `module.exports = ` must be strict JSON: no comments, no trailing commas.
+- `tree test` lists failing tests by request. It does not point to a file and line the way `pmx test` does.
+- The two modes keep separate working copies. Use one at a time on a collection; each refuses to pack over a file the other has changed.
+- It needs `pmx-tree.js` next to `pmx.js`. With `treemerge.js` there too, the collection keeps its layout; without it, the file is written in plain JSON layout.
+
 ## Limits
 
 - pmx only edits **scripts** (`event[].script.exec`). Request URLs, bodies, headers and collection variables are never touched, so a fix that needs those is still a manual edit.
@@ -443,3 +493,5 @@ npm test
 ```
 
 34 end-to-end checks: pmx against a demo collection and a mock API (18, including byte-identical round trips for 8 export shapes), and treemerge on its own, through real `git merge` runs, in the terminal, and over the browser UI's API (16, including 1,500 random documents).
+
+The experimental tree mode has 8 checks of its own (`node test/tree.test.js`), which `npm test` runs as well: round trips of nine file layouts, a collection of about 1,700 requests, 250 random collections, edits through the files, and what `tree pack` refuses.

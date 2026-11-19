@@ -942,10 +942,14 @@ merging is done by treemerge.js (same folder; works on any JSON or text file, se
   merge-install              = treemerge install "*.postman_collection.json"
 
 guards on every pack: only script lines you changed differ in the collection, whitespace-only
-edits are dropped, syntax errors and removed pm.test() calls are refused.`;
+edits are dropped, syntax errors and removed pm.test() calls are refused.
+
+experimental (needs pmx-tree.js next to this file; see its --help):
+  tree unpack | pack | check   the whole collection as files: requests, folders, variables and scripts`;
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
+  if (cmd === 'tree') { process.exitCode = await require('./pmx-tree.js').run(rest); return; }   // experimental whole-collection mode, in its own file
   const o = parseArgs(rest);
   switch (cmd) {
     case 'unpack': return cmdUnpack(o);
@@ -969,5 +973,5 @@ async function main() {
   }
 }
 module.exports = { scanExec, decodeSpan, encodeSpan, detectFormat, mergeScript, diffOps, parseNewmanLog, findTestLine, twoListHint,
-  stripWs, safe, rel, die, sha, stripBom, syntaxError, getCtx, readStrict, writeAtomic, readJson, clip, SELF };
+  stripWs, safe, rel, die, sha, stripBom, syntaxError, getCtx, readStrict, writeAtomic, readJson, clip, SELF, loadNewman, interp };
 if (require.main === module) main().catch(e => die(e && e.stack ? e.stack : String(e)));
