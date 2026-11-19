@@ -16,7 +16,7 @@ There are four ways of working. Each has its own commands.
 | **Fix tests** | newman assertions fail and the test scripts need to change | `pmx unpack`, `test`, `test --failed`, `digest`, `sync`, `pack`, `loop` | Only the scripts, one `.js` file each |
 | **Review** | you want to look at your script edits before committing | `pmx view` | Nothing. It writes one read-only HTML page with the diff |
 | **Merge** | git reports a conflict in a collection or in another JSON file | `treemerge`, or `pmx merge` and `pmx diff` | Nothing you need to edit, apart from a small file for each real conflict (under `.treemerge/`) |
-| **Whole collection** (experimental) | you want to change requests, variables or shared scripts, or add and remove requests | `pmx tree unpack`, `tree ui`, `tree status`, `tree test`, `tree pack`, `tree finish` | Everything, as temporary files: each request, each folder and the collection itself, plus the scripts |
+| **Whole collection** (experimental) | you want to change requests, variables or shared scripts, or add and remove requests | `pmx tree adopt`, `tree build`, `tree verify`, `tree import` (the files are the source), or `tree unpack`, `tree pack`, `tree finish` (a temporary working copy); `tree ui`, `tree status`, `tree test` for both | Everything: each request, each folder and the collection itself, plus the scripts |
 
 The first three were here from the start. The fourth was added later, as a trial of a broader idea: working on the whole collection as files, not only on its scripts, with a local page to edit them. It is a separate mode in its own files (`pmx-tree.js`, `pmx-tree.ui.html`) and changes nothing about the other three.
 
@@ -412,9 +412,17 @@ When something needs attention, the top of the page says so. Here a guard refuse
 
 `pmx unpack` turns only the scripts into files. `pmx tree` is a separate, experimental mode that does it for everything: each request, each folder and the collection itself.
 
-The files are a **temporary working copy**. The collection JSON stays the file that is kept and merged.
+There are two ways to use the files. Pick one per collection.
 
-![The four steps: unpack, edit, test, finish](docs/tree-steps.svg)
+| | **The files are the source** | **The files are a temporary working copy** |
+|---|---|---|
+| What is kept, reviewed and merged | The folder of files | The collection JSON |
+| The collection JSON | Generated from the files with `tree build` | Changed through the files, which are then removed with `tree finish` |
+| Start with | `tree adopt` | `tree unpack` |
+| "What changed" is counted from | The last git commit | The unpack |
+| Somebody changes the JSON directly, or sends an export from Postman | `tree import` takes it into the files | `tree pack` merges it with your edits |
+
+Both use the same files and the same page.
 
 ### Try it on the demo
 
@@ -448,7 +456,7 @@ This unpacks the collection and opens the page in your browser. **Run tests** sh
 | **All changes**, **Collection JSON** | Every change in one place, and the exact lines **Pack** will write into the collection JSON |
 | **Run tests**, **Run this** | Pack, then newman on everything or on one folder or request, with an environment file if you pick one |
 
-Every edit is written to the files a moment after you stop typing (in **Raw**: when you press **Apply** or leave the tab). Nothing reaches the collection JSON until **Pack**, **Run tests** or **Run this**.
+Every edit is written to the files a moment after you stop typing (in **Raw**: when you press **Apply** or leave the tab). Nothing reaches the collection JSON until **Pack**, **Run tests** or **Run this**. Where the files are the source, the button is called **Build JSON** and changes are counted from the last commit.
 
 - **Revert** puts a request and its scripts back as they were unpacked. On a folder it puts back the folder's own fields; what is in the folder stays.
 - **Remove** takes a request off its folder's list. **Put back** returns it with the edits it had.
@@ -470,9 +478,60 @@ The page talks to pmx on your own machine and to nothing else:
 
 ![What the page talks to](docs/tree-page.svg)
 
-### On a branch, so the change can be reviewed file by file
+### The files as the source
 
-Name a folder you commit, instead of the default scratch folder.
+The folder of files is what you keep, review and merge. The collection JSON is generated from it and never edited by hand.
+
+![The files as the source: build generates the JSON, import brings an export back](docs/tree-source.svg)
+
+Once per collection:
+
+```bash
+node tools/pmx.js tree adopt path/to/Your.postman_collection.json
+```
+
+```text
+adopted path/to/Your.postman_collection.json -> path/to/Your/   (4 requests, 4 folders, 7 scripts, 16 files)
+The files in path/to/Your/ are now the source. path/to/Your.postman_collection.json is generated from them:  node tools/pmx.js tree build
+check: building from the files gives the same file, byte for byte.
+```
+
+The collection JSON is not touched by this. Commit the new folder. From then on:
+
+```bash
+node tools/pmx.js tree ui
+```
+
+```bash
+node tools/pmx.js tree build
+```
+
+Edit in the page or by hand, build, and commit the files and the JSON together. Only the lines you changed move in the JSON.
+
+| When | Do |
+|---|---|
+| In CI | `node tools/pmx.js tree verify`. It fails unless the JSON is exactly what the files generate, and when a file in the folder is listed nowhere |
+| After a merge | `tree build`. Git merges the files one by one; the JSON is generated again, also when git left conflict marks in it |
+| Somebody edited the JSON, or sends an export from Postman | `tree import` (or `tree import export.json`). It updates the files in place: a request that is still there keeps its file, also under a new name. Edits in the files that are not committed yet are merged with it; a clash is refused, and `--theirs` takes the JSON as it is |
+| You want to see what changed | `tree status`, the page, or plain `git diff`: every request and script is its own file |
+
+`tree build` never overwrites a JSON that somebody edited directly. It tells you to import it first, or to say `--force`.
+
+The folder has a small note, `.pmx-tree.json`. It names the collection and how its file is laid out. It does not change when you build, so it does not conflict in merges.
+
+### The files as a temporary working copy
+
+The collection JSON stays what is kept and merged. The files exist while you make a change.
+
+![The four steps: unpack, edit, test, finish](docs/tree-steps.svg)
+
+```bash
+node tools/pmx.js tree unpack path/to/Your.postman_collection.json
+```
+
+Then `tree ui`, `tree test`, and `tree finish` when you are done. The files sit in `.pmx/`, which you keep out of git (see [Setup](#setup)).
+
+To let others review the change file by file, name a folder you commit instead:
 
 ![The files on a branch: unpack, edits, finish](docs/tree-branch.svg)
 
@@ -524,12 +583,16 @@ A file that no definition lists is not part of the collection. `tree status` mar
 
 | Command | Does |
 |---|---|
-| `tree unpack <collection.json> [--tree <folder>]` | Write every request, folder and script as its own file. Default place: `.pmx/<name>/tree/` |
+| `tree adopt <collection.json> [--tree <folder>]` | Make a folder of files the source of the collection. Default place: next to the JSON, named after it. The JSON is not touched |
+| `tree build [--force]` | Generate the collection JSON from the files. Only what changed moves. (`tree pack` does the same) |
+| `tree verify` | For CI: exit 1 unless the JSON is exactly what the files generate |
+| `tree import [<export.json>] [--theirs]` | Take the collection JSON as somebody edited it, or an export from Postman, into the files |
+| `tree unpack <collection.json> [--tree <folder>]` | Write the files as a temporary working copy. Default place: `.pmx/<name>/tree/` |
 | `tree ui [<collection.json>]` | Open the page. Unpacks first if nothing is unpacked yet. `--no-open` only prints the link |
-| `tree status` | What differs from the collection as it was unpacked, file by file. `?` marks a file that nothing lists |
+| `tree status` | What changed, file by file (since the last commit, or since the unpack), and whether the JSON holds it. `?` marks a file that nothing lists |
 | `tree pack [--ignore-whitespace]` | Build the collection JSON from the files. Only what changed moves |
 | `tree test [--environment <file>] [--folder <name>]` | Pack, then run newman. Each failing test is listed with its file and line |
-| `tree finish [--keep] [--force]` | Pack, check, and remove the files. Do this before merging. It stops if the folder holds files that nothing lists, unless `--force` |
+| `tree finish [--keep] [--force]` | For a temporary working copy: pack, check, and remove the files. Do this before merging. It stops if the folder holds files that nothing lists, unless `--force` |
 | `tree check <collection.json> [--run]` | Measure the round trip without touching anything: unpack, build, compare. `--run` also compares newman results |
 
 `tree pack` refuses a script that does not parse and a drop in the number of `pm.test` calls, as `pack` does. The count is per script. Removing a whole request, or a script from its definition, is your decision and is not refused.
@@ -543,7 +606,7 @@ Unlike `pack`, it treats an edit that only changes spacing as an edit, because a
 | Files you get | One per script | One per request, one per folder, one for the collection, and one per script |
 | What you can change | Script code | Script code, URLs, headers, bodies, auth and variables, and which requests exist and in what order |
 | Where you edit | Your editor | The page, or your editor |
-| Where the files live | `.pmx/`, never committed | `.pmx/`, or a folder you commit for the life of the branch |
+| Where the files live | `.pmx/`, never committed | A folder that stays as the source; or, as a working copy, `.pmx/` or a folder you commit for the life of the branch |
 | Writing back | The changed script lines are spliced into the original bytes | The collection is built from the files, and bytes that did not change are copied from the original |
 | newman | `pmx test`, with file and line, a list diff when two lists are compared, and `--failed` to re-run only the failures | `pmx tree test` or **Run tests**, with file and line; one folder or request on its own |
 | Seeing your changes | `pmx view` | The page (**Changes**, **All changes**, **Collection JSON**) and `tree status` |
@@ -553,7 +616,9 @@ Unlike `pack`, it treats an edit that only changes spacing as an edit, because a
 
 - The forms cover the common kinds of body (raw, form, GraphQL) and auth (bearer, basic, API key). Anything else is edited in the **Raw** tab.
 - When you edit a definition file by hand, the part after `module.exports = ` must be strict JSON: no comments, no trailing commas.
-- A file keeps its name when you rename its request. The names follow again after the next unpack.
+- A file keeps its name when you rename its request. In a temporary working copy the names follow again after the next unpack.
+- Where the files are the source, a script whose lines end differently from line to line is made uniform the first time the JSON is built. `tree adopt` says how many lines that moves.
+- `tree import` finds a request again by its name, and by its place when exactly as many requests were renamed as are left over. A request that was both renamed and moved is taken for a new one.
 - Commit the collection before you unpack it into a folder you commit. Otherwise only your machine knows the unpacked version, and a fresh clone cannot tell what changed. `tree unpack` says so.
 - **Run this** finds its folder or request by name, so it needs a name that no other folder or request has.
 - This mode and Fix tests keep separate working copies. Use one at a time on a collection.
@@ -588,7 +653,7 @@ In Claude Code, copy `claude/*.md` to `.claude/agents/`: `merge-resolver` settle
 |---|---|
 | pmx `unpack`, `ls`, `status`, `pack`, `sync`, `restore`, `digest`, `view` | None. They read and write local files only. |
 | pmx `test` | Runs newman, which calls the hosts your collection and environment name. pmx adds no calls of its own. |
-| pmx `tree unpack`, `status`, `pack`, `finish`, `check` | None. They read and write local files only. |
+| pmx `tree adopt`, `build`, `verify`, `import`, `unpack`, `status`, `pack`, `finish`, `check` | None. They read and write local files only, and ask git for the last commit. |
 | pmx `tree test`, `tree check --run`, and **Run tests** in the page | Run newman, as `pmx test` does. |
 | pmx `tree ui` | No outside calls. It serves the page to your own machine only (see below). |
 | pmx `loop`, the `postman-fixer` agent | Send script source and failure lists (these can include response data that your tests log) to the Claude model you run them with. Use them only where your employer allows that. Everything else works without them. |
@@ -619,11 +684,11 @@ npm install
 npm test
 ```
 
-54 end-to-end checks:
+55 end-to-end checks:
 
 - **pmx** against a demo collection and a mock API: 23, including byte-identical round trips for 8 export shapes.
 - **treemerge** on its own, through real `git merge` runs, in the terminal, and over the browser UI's API: 19, including 1,500 random documents.
-- **The tree mode**: 12. Round trips of nine file layouts, a collection of about 1,700 requests and 250 random collections; edits through the files; what `tree pack` refuses; the files on a git branch from unpack to finish, also with a checkout that converts line ends; a collection that changes underneath (merged, clash refused, an edit made again, an edit taken back); spacing-only edits and files that nothing lists; and the page's server (who may talk to it, every edit it can make, saves of an older copy refused, newman, and that nothing is read or written through a link).
+- **The tree mode**: 13. Round trips of nine file layouts, a collection of about 1,700 requests and 250 random collections; edits through the files; what `tree pack` refuses; the files on a git branch from unpack to finish, also with a checkout that converts line ends; a collection that changes underneath (merged, clash refused, an edit made again, an edit taken back); spacing-only edits and files that nothing lists; the page's server (who may talk to it, every edit it can make, saves of an older copy refused, newman, and that nothing is read or written through a link); and the files as the source (adopt builds back byte for byte for nine layouts and 250 random collections, build, verify, a merge, an edited JSON, an export imported in place).
 
 The page itself has a separate check in a real browser. It needs Playwright, which the tool does not, so it is not part of `npm test`:
 
