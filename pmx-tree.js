@@ -924,7 +924,8 @@ The files are a temporary working copy. The collection JSON stays what you keep 
   tree check <collection.json>    measure the round trip of a collection. --run also compares newman results
 
 options: --tree <dir> (where the files are; name a folder you commit to keep them on a branch), --collection <file>,
---environment <file> (a Postman environment for newman), --port <n> and --no-open (ui), --keep (finish),
+--environment <file> (a Postman environment for newman), --folder <name> (test: only this folder or request),
+--port <n> and --no-open (ui), --keep (finish),
 --force, --keep-whitespace, --allow-test-removal
 The other pmx commands work exactly as before.`;
 

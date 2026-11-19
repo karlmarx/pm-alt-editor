@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 404" width="960" height="404" role="img" aria-labelledby="t d">
+<title id="t">Which part of the collection becomes which file</title><desc id="d">The fields of the collection itself go to collection.js, a collection-level script to collection.prerequest.js, each folder to a folder.js, each request to a .request.js file and each of its scripts to a .js file. Two markers, $script and $children, stand in a definition file for what lives in another file.</desc>
+<style>
+.bg{fill:#f6f7f9}.card{fill:#fff;stroke:#dde1e6}
+.t{font:14px system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#1b1f24}
+.h{font-weight:650;font-size:15px}.s{font-size:12.5px;fill:#5d6570}.xs{font-size:11.5px;fill:#5d6570}
+.m{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;font-size:12.5px}
+.mb{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;font-size:13px;font-weight:700}
+.keep{fill:#e2f5e8;stroke:#1f8a4c}.keep-t{fill:#17753f}.keep-l{stroke:#1f8a4c}.keep-f{fill:#1f8a4c}
+.temp{fill:#fff1d6;stroke:#c98a2b}.temp-t{fill:#9a4d00}.temp-l{stroke:#c98a2b}.temp-f{fill:#c98a2b}
+.act{fill:#e4edff;stroke:#2f6fde}.act-t{fill:#1a56c4}.act-l{stroke:#2f6fde}.act-f{fill:#2f6fde}
+.fold{fill:#fff;fill-opacity:.55}
+.ln{fill:none;stroke:#7d8691;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.ln-f{fill:#7d8691}
+.dash{stroke-dasharray:5 4}.ghost{fill:none;stroke:#aab1ba;stroke-dasharray:5 4}.ghost-t{fill:#7d8691}
+.num{fill:#4f52d6}.num-t{fill:#fff;font:700 13px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.dim{opacity:.45}.thick{stroke-width:2.4}
+.c1{fill:#7a5af5}.c2{fill:#1a8fe3}.c3{fill:#d9822b}.c4{fill:#2e9e5b}.c5{fill:#d6457a}
+.ln.k1{stroke:#7a5af5}.ln.k2{stroke:#1a8fe3}.ln.k3{stroke:#d9822b}.ln.k4{stroke:#2e9e5b}.ln.k5{stroke:#d6457a}
+@media (prefers-color-scheme:dark){
+.bg{fill:#14171b}.card{fill:#1b1f24;stroke:#2c323a}
+.t{fill:#e7e9ec}.s,.xs{fill:#9aa2ac}
+.ln{stroke:#8d96a1}.ln-f{fill:#8d96a1}.ghost{stroke:#5d6570}.ghost-t{fill:#8d96a1}
+.keep{fill:#12301f;stroke:#3fae6f}.keep-t{fill:#63d394}.keep-l{stroke:#3fae6f}.keep-f{fill:#3fae6f}
+.temp{fill:#36270d;stroke:#d59a3c}.temp-t{fill:#f0b65c}.temp-l{stroke:#d59a3c}.temp-f{fill:#d59a3c}
+.act{fill:#13233f;stroke:#5c93f2}.act-t{fill:#8db6ff}.act-l{stroke:#5c93f2}.act-f{fill:#5c93f2}
+.fold{fill:#000;fill-opacity:.25}
+.num{fill:#8a8dff}.num-t{fill:#14171b}
+}</style><defs>
+<marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ln-f"/></marker>
+<marker id="ak" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="keep-f"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="temp-f"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="act-f"/></marker>
+</defs>
+<rect width="960" height="404" rx="14" class="bg"/>
+<rect x="18" y="18" width="440" height="368" rx="12" class="card"/>
+<rect x="502" y="18" width="440" height="368" rx="12" class="card"/>
+<text x="36" y="44" class="t mb keep-t">Demo.postman_collection.json</text>
+<text x="520" y="44" class="t mb temp-t">the files</text>
+<text x="52" y="74" class="t m" xml:space="preserve">{</text>
+<text x="52" y="95" class="t m" xml:space="preserve">  "info": { "name": "Demo" },</text>
+<text x="52" y="116" class="t m" xml:space="preserve">  "variable": [ { "key": "baseUrl", … } ],</text>
+<text x="52" y="137" class="t m" xml:space="preserve">  "event": [ { "listen": "prerequest",</text>
+<text x="52" y="158" class="t m" xml:space="preserve">               "script": { "exec": [ … ] } } ],</text>
+<text x="52" y="179" class="t m" xml:space="preserve">  "item": [</text>
+<text x="52" y="200" class="t m" xml:space="preserve">    { "name": "Orders",</text>
+<text x="52" y="221" class="t m" xml:space="preserve">      "item": [</text>
+<text x="52" y="242" class="t m" xml:space="preserve">        { "name": "Open orders",</text>
+<text x="52" y="263" class="t m" xml:space="preserve">          "request": { "method": "GET", … },</text>
+<text x="52" y="284" class="t m" xml:space="preserve">          "event": [ { "listen": "test",</text>
+<text x="52" y="305" class="t m" xml:space="preserve">                 "script": { "exec": [ … ] } } ]</text>
+<text x="52" y="326" class="t m" xml:space="preserve">        } ] } ]</text>
+<text x="52" y="347" class="t m" xml:space="preserve">}</text>
+<rect x="34" y="82" width="5" height="39" rx="2.5" class="c1"/>
+<path d="M444 101.5C484 101.5 476 75 516 75" class="ln k1" style="opacity:.75"/>
+<circle cx="444" cy="101.5" r="3.5" class="c1"/>
+<circle cx="520" cy="75" r="5" class="c1"/>
+<text x="534" y="80" class="t mb">collection.js</text>
+<text x="534" y="97" class="t xs">name, variables, auth of the collection</text>
+<rect x="34" y="124" width="5" height="39" rx="2.5" class="c2"/>
+<path d="M444 143.5C484 143.5 476 121 516 121" class="ln k2" style="opacity:.75"/>
+<circle cx="444" cy="143.5" r="3.5" class="c2"/>
+<circle cx="520" cy="121" r="5" class="c2"/>
+<text x="534" y="126" class="t mb">collection.prerequest.js</text>
+<text x="534" y="143" class="t xs">the script that runs before every request</text>
+<rect x="34" y="187" width="5" height="39" rx="2.5" class="c3"/>
+<path d="M444 206.5C484 206.5 476 167 516 167" class="ln k3" style="opacity:.75"/>
+<circle cx="444" cy="206.5" r="3.5" class="c3"/>
+<circle cx="520" cy="167" r="5" class="c3"/>
+<text x="534" y="172" class="t mb">Orders/folder.js</text>
+<text x="534" y="189" class="t xs">the folder, and the order of what is in it</text>
+<rect x="34" y="229" width="5" height="39" rx="2.5" class="c4"/>
+<path d="M444 248.5C484 248.5 476 213 516 213" class="ln k4" style="opacity:.75"/>
+<circle cx="444" cy="248.5" r="3.5" class="c4"/>
+<circle cx="520" cy="213" r="5" class="c4"/>
+<text x="534" y="218" class="t mb">Orders/Open_orders.request.js</text>
+<text x="534" y="235" class="t xs">method, URL, headers, body</text>
+<rect x="34" y="271" width="5" height="39" rx="2.5" class="c5"/>
+<path d="M444 290.5C484 290.5 476 259 516 259" class="ln k5" style="opacity:.75"/>
+<circle cx="444" cy="290.5" r="3.5" class="c5"/>
+<circle cx="520" cy="259" r="5" class="c5"/>
+<text x="534" y="264" class="t mb">Orders/Open_orders.test.js</text>
+<text x="534" y="281" class="t xs">the tests, as plain JavaScript</text>
+<path d="M518 296H926" class="ln" style="opacity:.4"/>
+<text x="520" y="316" class="t xs">In a definition file, two markers stand in for what lives elsewhere:</text>
+<text x="520" y="340" class="t xs">a script</text>
+<text x="638" y="340" style="font-size:11.5px" class="t m">{"$script": "Open_orders.test.js"}</text>
+<text x="520" y="364" class="t xs">a folder’s content</text>
+<text x="638" y="364" style="font-size:11.5px" class="t m">{"$children": ["Open_orders.request.js"]}</text>
+</svg>
