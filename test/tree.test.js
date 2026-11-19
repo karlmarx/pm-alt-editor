@@ -350,6 +350,7 @@ async function main() {
   // 9. the collection file changes while the files are unpacked (main was merged into the branch): pack merges, or refuses
   const d9 = scratch(), C9 = path.join(d9, 'Demo.postman_collection.json'), T9 = (...parts) => path.join(d9, '.pmx', 'Demo', 'tree', ...parts);
   makeDemo(d9);
+  const demoText9 = read(C9);
   assert.strictEqual(pmx(d9, 'tree', 'unpack', 'Demo.postman_collection.json').code, 0);
   editDef(T9('collection.js'), d => d.variable.push({ key: 'mine', value: '1' }));                                  // my edit, in the files
   fs.writeFileSync(C9, read(C9).replace('"name": "Ping"', '"name": "Ping (renamed upstream)"'));                    // someone else's, in the JSON
@@ -363,9 +364,8 @@ async function main() {
   const renamed9 = fs.readdirSync(T9('Smoke')).filter(f => f.endsWith('.request.js'));                              // the files were written again, so the request's file follows its new name
   assert.strictEqual(renamed9.length, 1, renamed9.join());
   assert.match(read(T9('Smoke', renamed9[0])), /"name": "Ping \(renamed upstream\)"/, 'the files were not written again from the merged collection');
-  r = pmx(d9, 'tree', 'status');
-  assert.match(r.out, /M collection\.js/);
-  assert.doesNotMatch(r.out, /Ping/);
+  r = pmx(d9, 'tree', 'status');                                                                                    // from here on, changes are counted from the merged collection
+  assert.match(r.out, /no changes against the collection as it was unpacked/);
   assert.match(r.out, /already holds these edits/);
   const packed9 = read(C9);
   assert.strictEqual(pmx(d9, 'tree', 'pack').code, 0);
@@ -398,9 +398,76 @@ async function main() {
   assert.strictEqual(pmx(d9b, 'tree', 'finish').code, 0);
   assert.deepStrictEqual(parse(read(C9b)).variable.map(v => v.key), ['baseUrl', 'mine', 'later']);
   assert.strictEqual(parse(read(C9b)).item[0].item[0].name, 'Ping (renamed upstream)');
-  ok('the collection changed underneath: pack merges the edits from the files into it and refreshes the files; a clash is refused with nothing written; a collection that already holds the edits is followed');
+  // an edit made again, and an edit taken back, after the collection was packed and then changed around those edits
+  const startOver = edit => {
+    const d = scratch(), C = path.join(d, 'Demo.postman_collection.json'), script = path.join(d, '.pmx', 'Demo', 'tree', 'Orders', 'Open_orders.test.js');
+    makeDemo(d);
+    assert.strictEqual(pmx(d, 'tree', 'unpack', 'Demo.postman_collection.json').code, 0);
+    fs.writeFileSync(script, read(script).replace('"in stock"', '"available"'));
+    assert.strictEqual(pmx(d, 'tree', 'pack').code, 0);
+    edit(C);
+    return { d, C, script, orders: () => parse(read(C)).item[2].item[0].event[1].script.exec.join('\n'), ping: () => parse(read(C)).item[0].item[0].name };
+  };
+  const upstream = C => fs.writeFileSync(C, read(C).replace('"name": "Ping"', '"name": "Ping (renamed upstream)"'));
+  let w = startOver(upstream);                                                                                      // the same line edited once more
+  fs.writeFileSync(w.script, read(w.script).replace('"available"', '"ready"'));
+  r = pmx(w.d, 'tree', 'pack');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.ok(w.orders().includes('"ready"') && !w.orders().includes('"available"') && w.ping() === 'Ping (renamed upstream)', 'an edit made again after a merge was not taken: ' + r.out);
+  w = startOver(upstream);                                                                                          // the edit taken back, and another one made
+  fs.writeFileSync(w.script, read(w.script).replace('"available"', '"in stock"'));
+  editDef(path.join(w.d, '.pmx', 'Demo', 'tree', 'collection.js'), d => d.variable.push({ key: 'later', value: '2' }));
+  r = pmx(w.d, 'tree', 'pack');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.ok(w.orders().includes('"in stock"') && !w.orders().includes('"available"'), 'an edit that was taken back came back after a merge');
+  assert.ok(parse(read(w.C)).variable.some(v => v.key === 'later') && w.ping() === 'Ping (renamed upstream)');
+  assert.match(read(w.script), /"in stock"/, 'the files got the taken-back edit again');
+  w = startOver(C => { fs.writeFileSync(C, demoText9); upstream(C); });                                              // the collection put back to the original, then changed: the edit is not in it
+  r = pmx(w.d, 'tree', 'pack');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.ok(w.orders().includes('"available"') && w.ping() === 'Ping (renamed upstream)', 'an edit that the newer collection did not hold was dropped');
+  assert.match(read(w.script), /"available"/);
+  ok('the collection changed underneath: pack merges the edits from the files into it and refreshes the files; a clash is refused with nothing written; a collection that already holds the edits is followed; an edit made again is taken, an edit taken back stays out, an edit the newer file lacks is kept');
 
-  // 10. the page's server: only this machine, only with the key; every edit the page can make; newman; nothing outside the tree
+  // 10. nothing is dropped without a word: spacing inside a script, and files that nothing lists
+  const dq = scratch(), Cq = path.join(dq, 'Demo.postman_collection.json'), Tq = (...parts) => path.join(dq, '.pmx', 'Demo', 'tree', ...parts);
+  makeDemo(dq);
+  assert.strictEqual(pmx(dq, 'tree', 'unpack', 'Demo.postman_collection.json').code, 0);
+  const scriptQ = Tq('Orders', 'Open_orders.test.js'), beforeQ = read(scriptQ);
+  fs.writeFileSync(scriptQ, beforeQ + '\n\n');                                             // an editor adds line breaks at the end: not an edit
+  assert.match(pmx(dq, 'tree', 'status').out, /no changes against the collection as it was unpacked/);
+  fs.writeFileSync(scriptQ, beforeQ.replace('"in stock"', '"instock"'));                      // one space inside a string: an edit
+  r = pmx(dq, 'tree', 'status');
+  assert.match(r.out, /M Orders\/Open_orders\.test\.js/);
+  r = pmx(dq, 'tree', 'pack', '--ignore-whitespace');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /--ignore-whitespace: edits that only change spacing were left out in Orders\/Open_orders\.test\.js/);
+  assert.ok(!read(Cq).includes('instock'));
+  assert.strictEqual(pmx(dq, 'tree', 'pack').code, 0);
+  assert.ok(read(Cq).includes('line.status !== \\"instock\\"'), 'an edit that only changes spacing was dropped');
+  fs.writeFileSync(Tq('Smoke', 'Ping.prerequest.js'), 'pm.variables.set("seen", "1");');     // a script written by hand, but listed nowhere
+  r = pmx(dq, 'tree', 'status');
+  assert.match(r.out, /\? Smoke\/Ping\.prerequest\.js {3}<- no definition lists this file/);
+  r = pmx(dq, 'tree', 'finish');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /TREE FINISH REFUSED[^]*\? Smoke\/Ping\.prerequest\.js/);
+  assert.ok(fs.existsSync(Tq('Smoke', 'Ping.prerequest.js')) && fs.existsSync(Tq('collection.js')), 'a refused finish removed files');
+  r = pmx(dq, 'tree', 'unpack', 'Demo.postman_collection.json');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /holds files that are not part of the collection[^]*Smoke\/Ping\.prerequest\.js/);
+  fs.writeFileSync(Cq, read(Cq).replace('"name": "Ping"', '"name": "Ping (renamed upstream)"'));
+  editDef(Tq('collection.js'), d => d.variable.push({ key: 'mine', value: '1' }));
+  r = pmx(dq, 'tree', 'pack');                                                               // the files are written again after a merge: the unlisted one stays
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /merged into the newer collection file/);
+  assert.strictEqual(read(Tq('Smoke', 'Ping.prerequest.js')), 'pm.variables.set("seen", "1");', 'a file that nothing lists was removed when the files were written again');
+  assert.strictEqual(pmx(dq, 'tree', 'status', 'Demo.postman_collection.json').code, 0);     // the collection may be named on the command line
+  assert.strictEqual(pmx(dq, 'tree', 'status', 'Other.postman_collection.json').code, 2);
+  assert.strictEqual(pmx(dq, 'tree', 'finish', '--force').code, 0);
+  assert.ok(!fs.existsSync(Tq()) && parse(read(Cq)).variable.some(v => v.key === 'mine'));
+  ok('nothing is dropped without a word: a space inside a string is an edit (line breaks at the very end are not), and a file that nothing lists is shown, kept through a merge, and stops finish and unpack');
+
+  // 11. the page's server: only this machine, only with the key; every edit the page can make; newman; nothing outside the tree
   const d10 = scratch(), C10 = path.join(d10, 'Demo.postman_collection.json'), T10 = (...parts) => path.join(d10, '.pmx', 'Demo', 'tree', ...parts);
   makeDemo(d10);
   fs.writeFileSync(path.join(d10, 'pmx.config.json'), JSON.stringify({ collection: 'Demo.postman_collection.json', newman: { timeoutRequest: 10000 } }));
@@ -475,7 +542,7 @@ async function main() {
     node.def.request.url.query.push({ key: 'limit', value: '5' });
     await post('/api/def', { id: orders, def: node.def });
     let saved = await post('/api/script', { file: ordersTest, text: node.scripts[1].text.replace('return line.status !== "in stock";', 'return line.status !== "in stock" && line.status !== "preorder";') });
-    assert.deepStrictEqual(saved, { syntax: null, tests: 2, testsBefore: 2 });
+    assert.deepStrictEqual([saved.syntax, saved.tests, saved.testsBefore, typeof saved.rev], [null, 2, 2, 'string']);
     saved = await post('/api/script', { file: 'collection.prerequest.js', text: 'pm.request.headers.upsert({ key: "X-Demo-Client", value: "pmx-demo" }' });
     assert.match(saved.syntax, /SyntaxError/);
     pending = await get('/api/pending');
@@ -501,9 +568,38 @@ async function main() {
     await post('/api/remove', { id: 'Catalogue/Staff_picks/folder.js' });
     st = await get('/api/state');
     assert.deepStrictEqual(st.removed.map(x => x.id).sort(), ['Catalogue/Staff_picks/Picks_by_genre.request.js', 'Catalogue/Staff_picks/folder.js']);
+    const ping10 = await get('/api/node?id=' + encodeURIComponent('Smoke/Ping.request.js'));
+    ping10.def.request.header.push({ key: 'X-Edited', value: 'before removing', type: 'text' });
+    let rev10 = (await post('/api/def', { id: 'Smoke/Ping.request.js', def: ping10.def, rev: ping10.rev })).rev;
+    a = await call('POST', '/api/def', { id: 'Smoke/Ping.request.js', def: ping10.originalDef, rev: ping10.rev });   // an older copy of the page, saved late
+    assert.strictEqual(a.code, 409, a.text);
+    assert.match(a.json.error, /was changed in the files since the page read it/);
+    a = await call('POST', '/api/script', { file: 'Smoke/Ping.test.js', text: 'old copy', rev: 'not-the-fingerprint' });
+    assert.strictEqual(a.code, 409, a.text);
+    assert.match(read(T10('Smoke', 'Ping.request.js')), /X-Edited/, 'an older copy was written over a newer file');
+    assert.ok(!read(T10('Smoke', 'Ping.test.js')).includes('old copy'));
     await post('/api/remove', { id: 'Smoke/Ping.request.js' });
-    assert.ok(!fs.existsSync(T10('Smoke', 'Ping.request.js')) && !fs.existsSync(T10('Smoke', 'Ping.test.js')));
-    await post('/api/revert', { id: 'Smoke/Ping.request.js' });                                           // "Put back": to where it was, first in its folder
+    assert.ok(fs.existsSync(T10('Smoke', 'Ping.request.js')) && fs.existsSync(T10('Smoke', 'Ping.test.js')), 'removing something that was unpacked deleted its files');
+    await post('/api/revert', { id: 'Smoke/Ping.request.js' });                                           // "Put back": to where it was, first in its folder,
+    assert.match(read(T10('Smoke', 'Ping.request.js')), /X-Edited/, 'put back lost the edits made before the removal');   // with the edits it had
+    rev10 = (await get('/api/node?id=' + encodeURIComponent('Smoke/Ping.request.js'))).rev;
+    await post('/api/def', { id: 'Smoke/Ping.request.js', def: ping10.originalDef, rev: rev10 });
+    // Revert on a folder gives it its own fields back and keeps what is in it; a script a definition had gained goes with it
+    const smoke10 = await get('/api/node?id=' + encodeURIComponent('Smoke/folder.js'));
+    smoke10.def.name = 'Smoke tests';
+    await post('/api/def', { id: 'Smoke/folder.js', def: smoke10.def, rev: smoke10.rev });
+    const gained10 = (await post('/api/add-script', { id: 'Smoke/folder.js', listen: 'prerequest' })).file;
+    assert.ok(fs.existsSync(T10(...gained10.split('/'))));
+    await post('/api/revert', { id: 'Smoke/folder.js' });
+    st = await get('/api/state');
+    assert.deepStrictEqual([st.root.children[0].name, st.root.children[0].children.map(c => c.name), st.root.children[0].scripts.length], ['Smoke', ['Ping', 'Version: 2?'], 0], 'reverting a folder dropped what was added to it');
+    assert.ok(!fs.existsSync(T10(...gained10.split('/'))), 'the script the folder had gained was left behind');
+    assert.deepStrictEqual(st.unlisted, []);
+    fs.writeFileSync(T10('Smoke', 'notes.js'), '// mine');
+    assert.deepStrictEqual((await get('/api/state')).unlisted, ['Smoke/notes.js']);
+    fs.rmSync(T10('Smoke', 'notes.js'));
+    assert.deepStrictEqual([...new Set((await get('/api/search?q=' + encodeURIComponent('"key": "status"'))).map(x => x.name))], ['Open orders']);
+    assert.deepStrictEqual([...new Set((await get('/api/search?q=' + encodeURIComponent('{{baseUrl}}/orders?status'))).map(x => x.name))], ['Open orders']);
     await post('/api/revert', { id: 'Catalogue/Staff_picks/folder.js' });
     st = await get('/api/state');
     assert.deepStrictEqual(st.removed, []);
@@ -587,6 +683,15 @@ async function main() {
     pending = await get('/api/pending');
     assert.strictEqual(pending.packed, true);
     assert.deepStrictEqual((await post('/api/pack')).errors, []);
+    // a pack from the terminal while the page is open is this working copy's own pack, not somebody else's change
+    let own = await get('/api/node?id=' + encodeURIComponent(orders));
+    await post('/api/script', { file: ordersTest, text: own.scripts[1].text.replace('"preorder"', '"backorder"'), rev: own.scripts[1].rev });
+    assert.strictEqual(pmx(d10, 'tree', 'pack').code, 0);
+    own = await get('/api/node?id=' + encodeURIComponent(orders));
+    await post('/api/script', { file: ordersTest, text: own.scripts[1].text.replace('"backorder"', '"reserved"'), rev: own.scripts[1].rev });
+    a = await post('/api/pack');
+    assert.deepStrictEqual(a.errors, [], 'a pack from the terminal was taken for a foreign change');
+    assert.ok(read(C10).includes('reserved') && !read(C10).includes('backorder'));
     await post('/api/close');
     const exit = await new Promise(resolve => { if (ui.exitCode != null) resolve(ui.exitCode); else ui.on('exit', resolve); setTimeout(() => resolve('still running'), 5000); });
     assert.strictEqual(exit, 0, 'tree ui did not stop when the page closed it');
@@ -619,7 +724,7 @@ async function main() {
   }
   ok('the page\'s server: answers only this machine and only with its key; shows, edits, adds, moves, removes and puts back through its API; diffs; newman with file:line and an environment; never reads or writes outside the tree, also not through a link whose target does not exist yet');
 
-  // 11. fuzz: random collections must come back identical, and the writer must reproduce their bytes
+  // 12. fuzz: random collections must come back identical, and the writer must reproduce their bytes
   let checkedWriter = 0;
   for (let round = 0; round < 250; round++) {
     const random = seeded(1000 + round);

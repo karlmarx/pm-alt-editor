@@ -36,7 +36,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { spawnSync, spawn } = require('child_process');
 const pmx = require('./pmx.js');
-const { rel, safe, sha, stripBom, readStrict, writeAtomic, mergeScript, syntaxError, detectFormat, diffOps, stripWs, findTestLine } = pmx;
+const { rel, safe, sha, stripBom, readStrict, writeAtomic, mergeScript, syntaxError, detectFormat, diffOps, findTestLine } = pmx;
 
 class Problem extends Error {}                   // something the user can fix: reported, never a stack trace
 const fail = message => { throw new Problem(message); };
@@ -48,6 +48,11 @@ const isPlain = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const oneKey = (v, key) => isPlain(v) && Object.keys(v).length === 1 && key in v;
 const isStrings = v => Array.isArray(v) && v.every(x => typeof x === 'string');
 const countTests = code => (code.match(/\bpm\.test\s*\(|\btests\s*\[/g) || []).length;
+/* Blank lines at the very end of a script say nothing (editors add and remove a last line break on their own):
+ * give `text` the ending of `like`. Every other difference, spaces included, counts as an edit. */
+const endBlanks = text => /(\r?\n[ \t]*)*$/.exec(text)[0];
+const sameEnd = (text, like) => { const a = text.replace(/\r\n/g, '\n'), b = like.replace(/\r\n/g, '\n'); return a.slice(0, a.length - endBlanks(a).length) + endBlanks(b); };
+const sameCode = (a, b) => sameEnd(a, '') === sameEnd(b, '');
 const insideCwd = p => { const r = path.relative(process.cwd(), path.resolve(p)); return !!r && !r.startsWith('..') && !path.isAbsolute(r); };
 const BOM = String.fromCharCode(0xFEFF);
 
@@ -157,7 +162,7 @@ function build(treeDir, manifest, baseText, opt = {}) {
   let withCr = 0, total = 0;
   JSON.stringify(base, (k, v) => { if (k === 'exec' && isStrings(v)) v.forEach(line => { total++; if (line.endsWith('\r')) withCr++; }); return v; });
   const crlf = withCr * 2 > total;
-  const errors = [], changed = [], open = new Set();
+  const errors = [], changed = [], ignored = [], open = new Set();
 
   function scriptLines(file) {
     const abs = inTree(treeDir, file);
@@ -165,13 +170,15 @@ function build(treeDir, manifest, baseText, opt = {}) {
     const text = fs.readFileSync(abs, 'utf8'), known = manifest.scripts[file];
     const before = known ? originalExec(known.key) : undefined;
     if (before === undefined) {                  // a script that was not in the collection when it was unpacked
-      const lines = text.split('\n').map(line => line.replace(/\r$/, ''));
+      const lines = sameEnd(text, '').split('\n').map(line => line.replace(/\r$/, ''));
       const problem = syntaxError(lines.join('\n'), file);
       if (problem) errors.push('SYNTAX ERROR ' + problem);
       changed.push(file);
       return crlf ? lines.map((line, i) => (i < lines.length - 1 ? line + '\r' : line)) : lines;
     }
-    const m = mergeScript(typeof before === 'string' ? before.split('\n') : before, text, { keepWs: opt.keepWs, defaultCrlf: crlf });
+    const was = typeof before === 'string' ? before.split('\n') : before;
+    const m = mergeScript(was, opt.ignoreWs ? text : sameEnd(text, was.map(line => line.replace(/\r$/, '')).join('\n')), { keepWs: !opt.ignoreWs, defaultCrlf: crlf });
+    if (!m.changed && opt.ignoreWs && !sameCode(text, was.map(line => line.replace(/\r$/, '')).join('\n'))) ignored.push(file);
     if (m.changed) {
       changed.push(file);
       const code = m.lines.map(line => line.replace(/\r$/, '')).join('\n');
@@ -215,7 +222,7 @@ function build(treeDir, manifest, baseText, opt = {}) {
     const top = readDef(treeDir, 'collection.js');
     json = isPlain(top.collection) && !top.item ? Object.assign({}, top, { collection: fill(top.collection, '') }) : fill(top, '');
   } catch (e) { if (!(e instanceof Problem)) throw e; errors.push(e.message); }
-  return { json, base, errors, changed };
+  return { json, base, errors, changed, ignored };
 }
 
 /* Turn the built collection into text. Where the original text is known, only what changed is laid out again and every
@@ -265,7 +272,7 @@ function openTree(o = {}) {
   const meta = readMeta(treeDir);
   if (!reallyInsideCwd(meta.collection) || isLink(meta.collection)) fail(`${rel(path.join(treeDir, META))} names a collection that is a link or is reached through one - refused`);
   const ctx = pmx.getCtx({ collection: meta.collection }, undefined);
-  const ws = { treeDir, meta, collection: ctx.collection, baseCopy: ctx.f('tree-base.json') };
+  const ws = { treeDir, meta, collection: ctx.collection, baseCopy: ctx.f('tree-base.json'), packCopy: ctx.f('tree-pack.json') };
   ws.baseText = findBase(ws);
   ws.orig = split(ws.baseText);
   return ws;
@@ -274,17 +281,34 @@ function openTree(o = {}) {
  * untouched, or from git's history. */
 function findBase(ws) {
   const fits = text => text != null && sha(text) === ws.meta.baseSha;
-  const readIf = file => { try { return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null; } catch (e) { return null; } };
-  const keep = text => { try { fs.mkdirSync(path.dirname(ws.baseCopy), { recursive: true }); fs.writeFileSync(ws.baseCopy, text); } catch (e) { /* only a cache */ } return text; };
   let text = readIf(ws.baseCopy);
   if (fits(text)) return text;
   text = readIf(ws.collection);
-  if (fits(text)) return keep(text);
-  if (/^[0-9a-f]{40,64}$/.test(ws.meta.baseBlob || '')) {
-    const r = spawnSync('git', ['cat-file', 'blob', ws.meta.baseBlob], { maxBuffer: 1 << 29 });
-    if (r.status === 0 && fits(r.stdout.toString('utf8'))) return keep(r.stdout.toString('utf8'));
-  }
-  return fail(`cannot find ${rel(ws.collection)} as it was when ${rel(ws.treeDir)}/ was unpacked (not in the scratch folder, not on disk, not in git history).\nIf the edits in ${rel(ws.treeDir)}/ are not needed any more, unpack again with --force.`);
+  if (fits(text)) return cache(ws.baseCopy, text);
+  text = gitBlobText(ws.meta.baseBlob, ws.collection);
+  if (fits(text)) return cache(ws.baseCopy, text);
+  return fail(`cannot find ${rel(ws.collection)} as it was when ${rel(ws.treeDir)}/ was unpacked: not in the scratch folder (.pmx/), not on disk, not in git.\nIt was probably not committed when the files were unpacked. On the machine that unpacked it, the commands still work.\nOtherwise unpack again with --force (the edits in ${rel(ws.treeDir)}/ are then lost).`);
+}
+const BLOB = /^[0-9a-f]{40,64}$/;
+const gitBlobOf = (text, file) => { const r = spawnSync('git', ['hash-object', '--stdin', '--path', rel(file)], { input: text, encoding: 'utf8' }); return r.status === 0 && BLOB.test(r.stdout.trim()) ? r.stdout.trim() : null; };
+const gitBlobText = (blob, file) => { if (!BLOB.test(blob || '')) return null; const r = spawnSync('git', ['cat-file', '--filters', '--path', rel(file), blob], { maxBuffer: 1 << 29 }); return r.status === 0 ? r.stdout.toString('utf8') : null; };
+const gitHas = blob => BLOB.test(blob || '') && spawnSync('git', ['cat-file', '-e', blob]).status === 0;
+const readIf = file => { try { return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null; } catch (e) { return null; } };
+const cache = (file, text) => { try { fs.mkdirSync(path.dirname(file), { recursive: true }); if (readIf(file) !== text) fs.writeFileSync(file, text); } catch (e) { /* only a cache */ } return text; };
+/* What the last pack wrote, if it can still be found: the scratch copy, or git. */
+function lastPack(ws) {
+  const fits = text => text != null && sha(text) === ws.meta.lastPackSha;
+  if (!ws.meta.lastPackSha) return null;
+  let text = readIf(ws.packCopy);
+  if (fits(text)) return text;
+  text = gitBlobText(ws.meta.lastPackBlob, ws.collection);
+  return fits(text) ? cache(ws.packCopy, text) : null;
+}
+function rememberPack(ws, text) {
+  cache(ws.packCopy, text);
+  if (ws.meta.lastPackSha === sha(text)) return;
+  ws.meta = Object.assign({}, ws.meta, { lastPackSha: sha(text), lastPackBlob: gitBlobOf(text, ws.collection) });
+  saveMeta(ws);
 }
 const saveMeta = ws => writeAtomic(inTree(ws.treeDir, META), JSON.stringify(ws.meta, null, 1) + '\n');
 const buildTree = (ws, opt) => build(ws.treeDir, { scripts: ws.orig.scripts }, ws.baseText, opt);
@@ -302,19 +326,21 @@ function unpackTree(o, collectionArg) {
   if (fs.existsSync(treeDir) && !fs.existsSync(path.join(treeDir, META)) && fs.readdirSync(treeDir).length) fail(`${rel(treeDir)}/ exists and holds other files. Name a new or empty folder.`);
   if (fs.existsSync(path.join(treeDir, META)) && !o.force) {
     let lost = true;                             // would unpacking again throw away edits that are not in the collection?
-    try { const ws = openTree({ tree: treeDir }), b = buildTree(ws); lost = b.errors.length > 0 || !same(b.json, parsed); } catch (e) { if (!(e instanceof Problem)) throw e; }
+    let extra = [];
+    try { const ws = openTree({ tree: treeDir }), b = buildTree(ws); lost = b.errors.length > 0 || !same(b.json, parsed); extra = describe(ws).unlisted; } catch (e) { if (!(e instanceof Problem)) throw e; }
     if (lost) fail(`${rel(treeDir)}/ has edits that are not in ${rel(ctx.collection)} yet. Run \`${pmx.SELF} tree pack\` first, or unpack again with --force to discard them.`);
+    if (extra.length) fail(`${rel(treeDir)}/ holds files that are not part of the collection (nothing lists them):\n  ${extra.join('\n  ')}\nList them, move them away, or unpack again with --force to discard them.`);
   }
   const { files, scripts } = split(text);
   fs.rmSync(treeDir, { recursive: true, force: true });
   writeFiles(treeDir, files);
-  const blob = spawnSync('git', ['hash-object', '--', ctx.collection], { encoding: 'utf8' });
-  const ws = { treeDir, collection: ctx.collection, baseCopy: ctx.f('tree-base.json'), meta: { version: 1, collection: rel(ctx.collection).split(path.sep).join('/'), baseSha: sha(text), baseBlob: blob.status === 0 ? blob.stdout.trim() : null } };
+  const blob = gitBlobOf(text, ctx.collection);
+  const ws = { treeDir, collection: ctx.collection, baseCopy: ctx.f('tree-base.json'), packCopy: ctx.f('tree-pack.json'), meta: { version: 1, collection: rel(ctx.collection).split(path.sep).join('/'), baseSha: sha(text), baseBlob: blob } };
   saveMeta(ws);
-  fs.mkdirSync(path.dirname(ws.baseCopy), { recursive: true });
-  fs.writeFileSync(ws.baseCopy, text);
+  cache(ws.baseCopy, text);
+  fs.rmSync(ws.packCopy, { force: true });
   const names = [...files.keys()];
-  return { treeDir, files: files.size, requests: names.filter(f => f.endsWith('.request.js')).length, folders: names.filter(f => f.endsWith('/folder.js')).length, scripts: Object.keys(scripts).length };
+  return { treeDir, committed: gitHas(blob), files: files.size, requests: names.filter(f => f.endsWith('.request.js')).length, folders: names.filter(f => f.endsWith('/folder.js')).length, scripts: Object.keys(scripts).length };
 }
 
 function packTree(ws, opt = {}) {
@@ -325,39 +351,51 @@ function packTree(ws, opt = {}) {
   if (onDisk !== null && ![ws.meta.baseSha, ws.meta.lastPackSha].includes(sha(onDisk)) && !opt.force) return packOnto(ws, b, out, onDisk, opt);
   if (!opt.dry) {
     if (onDisk !== out.text) writeAtomic(ws.collection, out.text);
-    if (ws.meta.lastPackSha !== sha(out.text)) { ws.meta.lastPackSha = sha(out.text); saveMeta(ws); }
+    rememberPack(ws, out.text);
   }
   const ops = diffOps(ws.baseText.split('\n'), out.text.split('\n'));
-  return { errors: [], text: out.text, how: out.how, json: b.json, scripts: b.changed, added: ops.filter(x => x[0] === '+').length, removed: ops.filter(x => x[0] === '-').length, ops };
+  return { errors: [], text: out.text, how: out.how, json: b.json, scripts: b.changed, ignored: b.ignored, added: ops.filter(x => x[0] === '+').length, removed: ops.filter(x => x[0] === '-').length, ops };
 }
 
-/* The collection file changed while the files were unpacked (main was merged into the branch, say). Then the edits in
- * the files are merged into that newer collection, and the files are written again from the result, so that they
- * show the same edits on top of the newer version. Edits that collide with the newer version are refused. */
+/* The collection file changed while the files were unpacked (main was merged into the branch, say). Then what the
+ * files changed is merged into that newer collection, and the files are written again from the result; from then on
+ * changes are counted from there. Edits that collide with the newer version are refused.
+ *
+ * What did the files change? Against the last pack, if the newer file is built on it (it holds everything that pack
+ * wrote): then an edit made again is taken, and an edit taken back stays taken back. Otherwise against the version
+ * that was unpacked. */
 function packOnto(ws, b, out, onDisk, opt) {
   const moved = `${rel(ws.collection)} was changed by something else since \`tree unpack\``;
-  let merged = null, theirs;
-  try { theirs = JSON.parse(stripBom(onDisk)); merged = require('./treemerge.js').mergeTexts({ file: ws.collection, base: ws.baseText, ours: onDisk, theirs: out.text }); } catch (e) { /* refused below */ }
+  let tm = null, theirs;
+  try { tm = require('./treemerge.js'); theirs = JSON.parse(stripBom(onDisk)); } catch (e) { tm = null; }
+  const merge3 = (base, ours, others) => { try { return tm.mergeTexts({ file: ws.collection, base, ours, theirs: others }); } catch (e) { return null; } };
+  const holds = text => { try { return same(JSON.parse(stripBom(text)), theirs); } catch (e) { return false; } };
+  let from = ws.baseText;
+  const last = tm ? lastPack(ws) : null;
+  if (last && last !== ws.baseText) { const m = merge3(ws.baseText, onDisk, last); if (m && !m.open && holds(m.text)) from = last; }
+  const merged = tm ? merge3(from, onDisk, out.text) : null;
   if (!merged || merged.open) return { errors: [`${moved}${merged ? `, and ${merged.open} place(s) were changed both there and in the files` : ''}. The two cannot be combined automatically.\n  Either unpack again (the edits in the files are lost), or pack with --force (the other change is lost).`] };
   const ops = diffOps(onDisk.split('\n'), merged.text.split('\n'));
-  const result = { errors: [], text: merged.text, how: 'merged into the newer collection file', json: JSON.parse(stripBom(merged.text)), scripts: b.changed, added: ops.filter(x => x[0] === '+').length, removed: ops.filter(x => x[0] === '-').length, ops, onto: true, base: onDisk };
-  if (same(result.json, theirs)) Object.assign(result, { text: onDisk, how: 'the newer collection file already held every edit; the files follow it', held: true, added: 0, removed: 0, ops: ops.filter(x => x[0] === '=') });
+  const result = { errors: [], text: merged.text, how: 'merged into the newer collection file', json: JSON.parse(stripBom(merged.text)), scripts: b.changed, ignored: b.ignored, added: ops.filter(x => x[0] === '+').length, removed: ops.filter(x => x[0] === '-').length, ops, onto: true, base: onDisk };
+  if (holds(merged.text)) Object.assign(result, { text: onDisk, how: 'the newer collection file already held every edit; the files follow it', held: true, added: 0, removed: 0, ops: ops.filter(x => x[0] === '=') });
   if (opt.dry) return result;
   if (!result.held) writeAtomic(ws.collection, result.text);
+  const fresh = split(result.text);
+  const extra = describe(ws).unlisted.filter(f => !fresh.files.has(f)).map(f => [f, readText(ws, f)]);    // files that nothing lists are the person's own: they stay
   fs.rmSync(ws.treeDir, { recursive: true, force: true });
-  writeFiles(ws.treeDir, split(result.text).files);
-  const blob = spawnSync('git', ['hash-object', '--stdin'], { input: onDisk, encoding: 'utf8' });
-  ws.meta = Object.assign({}, ws.meta, { baseSha: sha(onDisk), baseBlob: blob.status === 0 ? blob.stdout.trim() : null, lastPackSha: sha(result.text) });
+  writeFiles(ws.treeDir, fresh.files);
+  writeFiles(ws.treeDir, extra.filter(([, text]) => text != null));
+  const blob = gitBlobOf(result.text, ws.collection);
+  ws.meta = Object.assign({}, ws.meta, { baseSha: sha(result.text), baseBlob: blob, lastPackSha: sha(result.text), lastPackBlob: blob });
   saveMeta(ws);
-  fs.mkdirSync(path.dirname(ws.baseCopy), { recursive: true });
-  fs.writeFileSync(ws.baseCopy, onDisk);
-  ws.baseText = onDisk;
-  ws.orig = split(onDisk);
+  cache(ws.baseCopy, result.text);
+  cache(ws.packCopy, result.text);
+  ws.baseText = result.text;
+  ws.orig = fresh;
   return result;
 }
 
 /* ───────────────────────── what is in the tree, and what changed ───────────────────────── */
-const sameCode = (a, b) => a.split('\n').map(stripWs).join('\n') === b.split('\n').map(stripWs).join('\n');   // pack ignores whitespace-only edits, so does this
 function describe(ws) {
   const problems = [], seen = new Set(), open = new Set();
   const original = file => { try { return parseDef(ws.orig.files.get(file), file); } catch (e) { return undefined; } };
@@ -402,7 +440,17 @@ function describe(ws) {
   });
   const counts = { modified: 0, added: 0, removed: removed.length };
   (function tally(n) { if (n.status !== 'same' || n.scripts.some(s => s.status !== 'same')) counts[n.status === 'added' ? 'added' : 'modified']++; n.children.forEach(tally); })(root);
-  return { root, removed, problems, counts };
+  // Files in the folder that no definition points to and that were not unpacked: somebody put them there. They are not part of the collection.
+  const unlisted = treeFiles(ws.treeDir).filter(f => !seen.has(f) && !ws.orig.files.has(f));
+  return { root, removed, problems, counts, unlisted };
+}
+function treeFiles(treeDir) {                    // every real file in the folder (links and the note left out), with / in its path
+  const out = [];
+  (function walk(dir, prefix) {
+    let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+    for (const e of entries) { if (e.isDirectory()) walk(path.join(dir, e.name), prefix + e.name + '/'); else if (e.isFile() && prefix + e.name !== META && !e.name.endsWith('.pmx-tmp')) out.push(prefix + e.name); }
+  })(treeDir, '');
+  return out.sort();
 }
 const flat = root => { const out = []; (function walk(n, parent) { out.push({ node: n, parent }); n.children.forEach(c => walk(c, n)); })(root, null); return out; };
 function findNode(ws, id) {
@@ -426,27 +474,39 @@ function readNode(ws, id) {
   });
   let originalDef = null;
   if (ws.orig.files.has(id)) originalDef = parseDef(ws.orig.files.get(id), id);
-  return { id, kind: node.kind, name: node.name, path: node.path, status: node.status, def, originalDef, inherited,
+  return { id, kind: node.kind, name: node.name, path: node.path, status: node.status, def, originalDef, inherited, rev: sha(readText(ws, id) || ''),
     scripts: node.scripts.map(s => {
       const text = readText(ws, s.file) || '', original = ws.orig.files.has(s.file) ? ws.orig.files.get(s.file) : null;
-      return { file: s.file, listen: s.listen, status: s.status, text, original, syntax: syntaxError(text, s.file), tests: countTests(text), testsBefore: original == null ? null : countTests(original) };
+      return { file: s.file, listen: s.listen, status: s.status, text, original, rev: sha(text), syntax: syntaxError(text, s.file), tests: countTests(text), testsBefore: original == null ? null : countTests(original) };
     }) };
 }
-function writeDef(ws, id, def) {
+/* `rev` is the fingerprint of the file as the page last saw it. If the file is different now, somebody else wrote it. */
+function notStale(ws, file, rev) {
+  if (rev == null || sha(readText(ws, file) || '') === rev) return;
+  const stale = new Problem(`${file} was changed in the files since the page read it, so the page's older copy was not written over it. It is shown again as it is now.`);
+  stale.stale = true;
+  throw stale;
+}
+function writeDef(ws, id, def, rev) {
   const { node } = findNode(ws, id);
   if (!isPlain(def)) fail('a definition must be an object');
+  notStale(ws, id, rev);
   const body = bodyOf(def, node.kind);
   if (node.kind !== 'request' && !(isPlain(body.item) && Array.isArray(body.item.$children)) && !Array.isArray(body.item)) fail('a folder or collection needs its "item" list ({"$children": [...]})');
   const before = readText(ws, id) || '', title = before.startsWith('//') ? before.slice(2, before.indexOf('\n')).trim() : node.path.join(' / ') || 'the collection itself';
-  writeText(ws, id, defText(title, def));
+  const text = defText(title, def);
+  writeText(ws, id, text);
+  return sha(text);
 }
-function writeScript(ws, file, text) {
+function writeScript(ws, file, text, rev) {
   const owner = flat(describe(ws).root).find(x => x.node.scripts.some(s => s.file === file));
   if (!owner) fail(`${file} is not a script of this collection`);
   if (typeof text !== 'string') fail('a script must be text');
-  writeText(ws, file, text.replace(/\r\n/g, '\n'));
+  notStale(ws, file, rev);
+  const written = text.replace(/\r\n/g, '\n');
+  writeText(ws, file, written);
   const before = ws.orig.files.has(file) ? ws.orig.files.get(file) : null;
-  return { syntax: syntaxError(text, file), tests: countTests(text), testsBefore: before == null ? null : countTests(before) };
+  return { syntax: syntaxError(text, file), tests: countTests(text), testsBefore: before == null ? null : countTests(before), rev: sha(written) };
 }
 function addScript(ws, id, listen) {
   if (!['prerequest', 'test'].includes(listen)) fail('a script is either "prerequest" or "test"');
@@ -511,9 +571,10 @@ function moveNode(ws, id, by) {
 }
 function removeNode(ws, id) {
   const { node } = withParentList(ws, id, (list, at) => { list.splice(at, 1); });
+  if (ws.orig.files.has(node.id)) return;        // something that was unpacked is only taken off the list; its files wait for a "put back"
   const still = new Set(flat(describe(ws).root).flatMap(x => [x.node.id, ...x.node.scripts.map(s => s.file)]));   // listed somewhere else too? then keep the files
-  if (node.kind === 'folder') { if (![...still].some(f => f.startsWith(node.dir + '/'))) fs.rmSync(inTree(ws.treeDir, node.dir), { recursive: true, force: true }); }
-  else for (const file of [node.id, ...node.scripts.map(s => s.file)]) if (!still.has(file)) fs.rmSync(inTree(ws.treeDir, file), { force: true });
+  if (node.kind === 'folder') { if (![...still].some(f => f.startsWith(node.dir + '/')) && ![...ws.orig.files.keys()].some(f => f.startsWith(node.dir + '/'))) fs.rmSync(inTree(ws.treeDir, node.dir), { recursive: true, force: true }); }
+  else for (const file of [node.id, ...node.scripts.map(s => s.file)]) if (!still.has(file) && !ws.orig.files.has(file)) fs.rmSync(inTree(ws.treeDir, file), { force: true });
 }
 function duplicateNode(ws, id) {
   const { node, parent } = findNode(ws, id);
@@ -532,29 +593,46 @@ function duplicateNode(ws, id) {
   withParentList(ws, id, (list, at) => { list.splice(at + 1, 0, file); });
   return newId;
 }
-/* Put a file, or a removed request or folder, back to what it was when the collection was unpacked. */
+/* Put a script or a definition back to what it was when the collection was unpacked, or list a removed request or
+ * folder again.
+ *  - A folder or the collection gets its own fields back and keeps the list of what is in it now: requests added to
+ *    it stay, requests removed from it stay removed (each has its own "remove" and "put back").
+ *  - Putting something back never writes over a file that is still there: its edits come back with it. */
 function revert(ws, id) {
   if (!ws.orig.files.has(id)) fail(`${id} did not exist when the collection was unpacked`);
   const isDef = id === 'collection.js' || id.endsWith('.request.js') || id.endsWith('/folder.js');
-  const present = flat(describe(ws).root).some(x => x.node.id === id || x.node.scripts.some(s => s.file === id));
-  const put = file => writeText(ws, file, ws.orig.files.get(file));
-  if (present || !isDef) { put(id); return; }
-  // a removed request or folder: put its files back and list it again where it was
-  const dir = id.endsWith('/folder.js') ? id.slice(0, -'/folder.js'.length) : null;
+  const kind = id === 'collection.js' ? 'collection' : id.endsWith('/folder.js') ? 'folder' : 'request';
   const up = p => (path.posix.dirname(p) === '.' ? '' : path.posix.dirname(p));
-  const pointsTo = (def, from) => (Array.isArray(def.event) ? def.event : []).filter(ev => isPlain(ev) && isPlain(ev.script) && oneKey(ev.script.exec, '$script')).map(ev => stays(from, ev.script.exec.$script));
-  const files = dir ? [...ws.orig.files.keys()].filter(f => f.startsWith(dir + '/')) : [id, ...pointsTo(parseDef(ws.orig.files.get(id), id), up(id))];
+  const pointsTo = (def, from) => (Array.isArray(def.event) ? def.event : []).filter(ev => isPlain(ev) && isPlain(ev.script) && oneKey(ev.script.exec, '$script')).map(ev => { try { return stays(from, ev.script.exec.$script); } catch (e) { return null; } }).filter(Boolean);
+  const titleOf = text => { const first = String(text || '').split('\n')[0]; return first.startsWith('//') ? first.slice(2).trim() : 'the collection itself'; };
+  const present = flat(describe(ws).root).some(x => x.node.id === id || x.node.scripts.some(s => s.file === id));
+  const original = ws.orig.files.get(id);
+  if (!isDef) { writeText(ws, id, original); return; }
+  if (present) {
+    let now = null;
+    try { now = readDef(ws.treeDir, id); } catch (e) { if (!(e instanceof Problem)) throw e; }
+    const back = parseDef(original, id), dir = kind === 'folder' ? up(id) : kind === 'request' ? up(id) : '';
+    const list = now && isPlain(bodyOf(now, kind).item) ? bodyOf(now, kind).item.$children : null;
+    if (kind !== 'request' && Array.isArray(list) && isPlain(bodyOf(back, kind).item)) bodyOf(back, kind).item.$children = list;
+    const gained = now ? pointsTo(bodyOf(now, kind), dir).filter(f => !ws.orig.files.has(f)) : [];
+    writeText(ws, id, kind === 'request' || !now ? original : defText(titleOf(original), back));
+    const still = new Set(flat(describe(ws).root).flatMap(x => x.node.scripts.map(s => s.file)));
+    for (const f of gained) if (!still.has(f)) fs.rmSync(inTree(ws.treeDir, f), { force: true });    // a script this definition had gained goes with it
+    return;
+  }
+  // a removed request or folder: list it again where it was; files of it that are gone come back as they were unpacked
+  const dir = kind === 'folder' ? up(id) : null;
+  const files = dir ? [...ws.orig.files.keys()].filter(f => f.startsWith(dir + '/')) : [id, ...pointsTo(parseDef(original, id), up(id))];
   const holderDir = up(dir || id), holderId = holderDir ? holderDir + '/folder.js' : 'collection.js', holderKind = holderDir ? 'folder' : 'collection';
   if (readText(ws, holderId) == null) fail(`the folder that held it (${holderDir}/) is gone too. Put that folder back first.`);
-  files.filter(f => ws.orig.files.has(f)).forEach(put);
+  for (const f of files) if (ws.orig.files.has(f) && readText(ws, f) == null) writeText(ws, f, ws.orig.files.get(f));
   const pointer = dir ? path.posix.basename(dir) + '/' : path.posix.basename(id);
   const holder = readDef(ws.treeDir, holderId), list = bodyOf(holder, holderKind).item.$children;
   if (list.includes(pointer)) return;
   const before = bodyOf(parseDef(ws.orig.files.get(holderId), holderId), holderKind).item.$children;
   const earlier = before.slice(0, before.indexOf(pointer)).filter(p => list.includes(p));
   list.splice(earlier.length ? list.indexOf(earlier[earlier.length - 1]) + 1 : 0, 0, pointer);
-  const first = (readText(ws, holderId) || '').split('\n')[0];
-  writeText(ws, holderId, defText(first.startsWith('//') ? first.slice(2).trim() : 'the collection itself', holder));
+  writeText(ws, holderId, defText(titleOf(readText(ws, holderId)), holder));
 }
 
 /* Line-by-line difference of every file of a node against the unpacked original. */
@@ -594,7 +672,8 @@ function search(ws, q) {
     const text = readText(ws, file);
     if (text == null) continue;
     text.split('\n').forEach((line, i) => {
-      if (hits.length >= 300 || (file === node.id && i === 0) || !line.toLowerCase().includes(needle)) return;
+      const shown = file === node.id ? line.replace(/\\(["\\/])/g, '$1') : line;          // in a definition, text sits inside JSON strings
+      if (hits.length >= 300 || (file === node.id && i === 0) || !(line.toLowerCase().includes(needle) || shown.toLowerCase().includes(needle))) return;
       hits.push({ id: node.id, kind: node.kind, name: node.name, path: node.path, file, script: file !== node.id, line: i + 1, text: line.trim().slice(0, 240) });
     });
   }
@@ -682,7 +761,7 @@ async function testTree(ws, o = {}) {
 
 /* ───────────────────────── commands ───────────────────────── */
 function parse(argv) {
-  const flags = new Set(['run', 'force', 'keep-whitespace', 'allow-test-removal', 'no-open', 'keep']), o = { _: [] };
+  const flags = new Set(['run', 'force', 'ignore-whitespace', 'keep-whitespace', 'allow-test-removal', 'no-open', 'keep']), o = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith('--')) { o._.push(a); continue; }
@@ -691,12 +770,13 @@ function parse(argv) {
   }
   return o;
 }
-const packOptions = o => ({ keepWs: o['keep-whitespace'], allowTestRemoval: o['allow-test-removal'], force: o.force, environment: o.environment, folder: o.folder });
+const packOptions = o => ({ ignoreWs: o['ignore-whitespace'], allowTestRemoval: o['allow-test-removal'], force: o.force, environment: o.environment, folder: o.folder });
 const treeArg = ws => (ws.treeDir === path.join(path.dirname(ws.baseCopy), 'tree') ? '' : ` --tree ${rel(ws.treeDir)}`);
 
 function cmdUnpack(o) {
   const r = unpackTree(o, o._[0]);
   console.log(`unpacked the whole collection -> ${rel(r.treeDir)}/   (${r.requests} requests, ${r.folders} folders, ${r.scripts} scripts, ${r.files} files)`);
+  if (o.tree && !r.committed) console.log('note: this version of the collection is not committed in git. Commit it before or with the files:\n      otherwise only this machine can tell what was changed (a fresh clone cannot).');
   console.log(`edit there, or in the page:  ${pmx.SELF} tree ui`);
   console.log(`then:                        ${pmx.SELF} tree test    and, before merging,   ${pmx.SELF} tree finish`);
   return 0;
@@ -710,6 +790,7 @@ function reportPack(ws, r, quiet) {
   console.log(`packed -> ${rel(ws.collection)}   (+${r.added} -${r.removed} lines${r.onto ? '' : ' against the unpacked version'}; ${r.how})`);
   if (r.onto) console.log(`  ${rel(ws.collection)} had changed since it was unpacked. The files in ${rel(ws.treeDir)}/ were written again from the result.`);
   if (r.scripts.length) console.log('  scripts changed: ' + r.scripts.join(', '));
+  if (r.ignored && r.ignored.length) console.log('  --ignore-whitespace: edits that only change spacing were left out in ' + r.ignored.join(', '));
   if (!quiet) console.log(`next: ${pmx.SELF} tree test`);
   return 0;
 }
@@ -728,8 +809,10 @@ function cmdStatus(o) {
   console.log(`${rel(ws.treeDir)}/  for  ${rel(ws.collection)}`);
   if (!lines.length) console.log('no changes against the collection as it was unpacked');
   lines.forEach(l => console.log(l));
+  d.unlisted.forEach(f => console.log(`  ? ${f}   <- no definition lists this file, so it is not part of the collection`));
   d.problems.forEach(p => console.log('  ERROR ' + p));
   const dry = packTree(ws, Object.assign(packOptions(o), { dry: true }));
+  if (dry.ignored && dry.ignored.length) console.log('  --ignore-whitespace: edits that only change spacing are left out in ' + dry.ignored.join(', '));
   if (!dry.errors.length) {
     const onDisk = fs.existsSync(ws.collection) ? readStrict(ws.collection) : null;
     if (dry.onto) console.log(`${rel(ws.collection)} was changed by something else since it was unpacked; \`tree pack\` will ${dry.held ? 'write the files again from it' : 'merge these edits into it'}`);
@@ -758,13 +841,22 @@ async function cmdTest(o) {
 
 /* Before merging: write the collection, make sure it holds exactly what the files say, and remove the files. */
 function cmdFinish(o) {
-  const ws = openTree(o), r = packTree(ws, packOptions(o));
+  const ws = openTree(o);
+  const extra = describe(ws).unlisted;
+  if (extra.length && !o.force && !o.keep) {
+    console.log(`TREE FINISH REFUSED - ${rel(ws.treeDir)}/ holds files that are not part of the collection (no definition lists them):`);
+    extra.forEach(f => console.log('  ? ' + f));
+    console.log('List them (a script in its request\'s "event", a request in its folder\'s "$children"), move them away, or finish with --force to remove them too.');
+    return 2;
+  }
+  const r = packTree(ws, packOptions(o));
   const code = reportPack(ws, r, true);
   if (code) return code;
   if (!same(JSON.parse(stripBom(readStrict(ws.collection))), r.json)) fail(`${rel(ws.collection)} does not hold what the files say - nothing was removed`);
   if (o.keep) { console.log(`kept ${rel(ws.treeDir)}/ (--keep)`); return 0; }
   fs.rmSync(ws.treeDir, { recursive: true, force: true });
   fs.rmSync(ws.baseCopy, { force: true });
+  fs.rmSync(ws.packCopy, { force: true });
   console.log(`removed ${rel(ws.treeDir)}/ - the collection file now holds everything.`);
   console.log(`next: run the tests on it (${pmx.SELF} unpack ${rel(ws.collection)} && ${pmx.SELF} test), then commit ${rel(ws.collection)}.`);
   return 0;
@@ -819,7 +911,12 @@ function serve(ws, o = {}) {
   const envList = () => { if (!envs || Date.now() - envsAt > 10000) { envs = environments(); envsAt = Date.now(); } return envs; };
   const state = () => {
     const d = describe(ws);
-    return { collection: rel(ws.collection), tree: rel(ws.treeDir), root: d.root, removed: d.removed, problems: d.problems, counts: d.counts, environments: envList(), environment: chosenEnv, lastRun };
+    return { collection: rel(ws.collection), tree: rel(ws.treeDir), root: d.root, removed: d.removed, unlisted: d.unlisted, problems: d.problems, counts: d.counts, environments: envList(), environment: chosenEnv, lastRun };
+  };
+  const sync = () => {                           // the note may have been written by a command in the terminal meanwhile (a pack, a merge)
+    const meta = readMeta(ws.treeDir), moved = meta.baseSha !== ws.meta.baseSha;
+    ws.meta = meta;
+    if (moved) { ws.baseText = findBase(ws); ws.orig = split(ws.baseText); }
   };
   const dryPack = () => packTree(ws, { dry: true });
   const routes = {
@@ -841,8 +938,8 @@ function serve(ws, o = {}) {
     },
     'GET /api/search': q => search(ws, q.q),
     'GET /api/variables': () => variables(ws, chosenEnv),
-    'POST /api/def': (q, b) => { writeDef(ws, b.id, typeof b.text === 'string' ? parseDef(DEF_START + b.text + ';', b.id) : b.def); return { ok: true }; },
-    'POST /api/script': (q, b) => writeScript(ws, b.file, b.text),
+    'POST /api/def': (q, b) => ({ ok: true, rev: writeDef(ws, b.id, typeof b.text === 'string' ? parseDef(DEF_START + b.text + ';', b.id) : b.def, b.rev) }),
+    'POST /api/script': (q, b) => writeScript(ws, b.file, b.text, b.rev),
     'POST /api/add-script': (q, b) => ({ file: addScript(ws, b.id, b.listen) }),
     'POST /api/add': (q, b) => ({ id: addNode(ws, b.parent, b.kind, b.name) }),
     'POST /api/remove': (q, b) => { removeNode(ws, b.id); return { ok: true }; },
@@ -895,11 +992,12 @@ function serve(ws, o = {}) {
           if (u.pathname === '/api/close' && req.method === 'POST') { send(res, 200, { ok: true }); server.close(); setTimeout(resolve, 50); return; }
           const handler = routes[`${req.method} ${u.pathname}`];
           if (!handler) return send(res, 404, { error: 'not found' });
+          sync();
           const raw = Buffer.concat(parts).toString('utf8');
           const body = raw ? JSON.parse(raw) : {};
           if (!isPlain(body)) return send(res, 400, { error: 'expected a JSON object' });
           send(res, 200, await handler(Object.fromEntries(u.searchParams), body));
-        } catch (e) { send(res, e instanceof Problem || e instanceof SyntaxError ? 400 : 500, { error: e instanceof Problem || e instanceof SyntaxError ? e.message : 'internal error: ' + e.message }); }
+        } catch (e) { send(res, e instanceof Problem && e.stale ? 409 : e instanceof Problem || e instanceof SyntaxError ? 400 : 500, { error: e instanceof Problem || e instanceof SyntaxError ? e.message : 'internal error: ' + e.message, stale: !!(e && e.stale) }); }
       });
     });
     server.on('error', reject);
@@ -942,12 +1040,13 @@ The files are a temporary working copy. The collection JSON stays what you keep 
 options: --tree <dir> (where the files are; name a folder you commit to keep them on a branch), --collection <file>,
 --environment <file> (a Postman environment for newman), --folder <name> (test: only this folder or request),
 --port <n> and --no-open (ui), --keep (finish),
---force, --keep-whitespace, --allow-test-removal
+--force, --ignore-whitespace (pack: drop edits that only change spacing), --allow-test-removal
 The other pmx commands work exactly as before.`;
 
 async function run(argv) {
   try {
     const [sub, ...rest] = argv, o = parse(rest);
+    if (['pack', 'status', 'test', 'finish'].includes(sub) && o._[0] && !o.collection) o.collection = o._[0];
     if (sub === 'unpack') return cmdUnpack(o);
     if (sub === 'pack') return cmdPack(o);
     if (sub === 'status') return cmdStatus(o);
