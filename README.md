@@ -5,6 +5,21 @@ Two tools, no dependencies:
 - **`treemerge`** — an interactive 3-way merge tool that understands structure. Any JSON file, with Postman collections as a built-in profile; any other text file line by line.
 - **`pmx`** — fix failing Postman / newman tests without anyone editing the collection JSON.
 
+## The modes
+
+There are four ways of working. Each has its own commands, and none of them gets in the way of the others.
+
+| Mode | Use it when | Commands | What it turns into files |
+|---|---|---|---|
+| **Fix tests** | newman assertions fail and the test scripts need to change | `pmx unpack`, `test`, `test --failed`, `digest`, `sync`, `pack`, `loop` | Only the scripts, one `.js` file each |
+| **Review** | you want to look at your script edits before committing | `pmx view` | Nothing. It writes one read-only HTML page with the diff |
+| **Merge** | git reports a conflict in a collection or in another JSON file | `treemerge`, or `pmx merge` and `pmx diff` | Nothing you need to edit, apart from a small file for each real conflict (under `.treemerge/`) |
+| **Whole collection** (experimental) | you want to change requests, variables or shared scripts, or add and remove requests | `pmx tree unpack`, `tree pack`, `tree test`, `tree check` | Everything: each request, each folder and the collection itself, plus the scripts |
+
+The first three were here from the start. The fourth was added later, as a trial of a broader idea: working on the whole collection as files, not only on its scripts. It is a separate mode in its own file (`pmx-tree.js`) and changes nothing about the other three.
+
+Where each one is described: [Merge](#treemerge), [Fix tests](#pmx), [Review](#commands), [Whole collection](#experimental-the-whole-collection-as-files).
+
 ---
 
 # treemerge
@@ -423,6 +438,16 @@ Catalogue/Genres_and_formats.test.js       that request's test script, as plain 
 Catalogue/Staff_picks/folder.js
 ...
 ```
+
+How it compares with the **Fix tests** mode, which is the one it resembles:
+
+| | Fix tests (`pmx unpack`, `pack`, `test`) | Whole collection (`pmx tree unpack`, `pack`, `test`) |
+|---|---|---|
+| Files you get | One per script | One per request, one per folder, one for the collection, and one per script |
+| What you can change | Script code | Script code, URLs, headers, bodies, auth and variables, and which requests exist and in what order |
+| Writing back | The changed script lines are spliced into the original bytes | The collection is built from the files, and bytes that did not change are copied from the original |
+| newman | `pmx test`, with the file and line of each failing test, and `--failed` to re-run only the failures | `pmx tree test`, with failing tests listed by request |
+| Seeing your changes | `pmx view` | The `git diff` of the collection. There is no page for this mode yet |
 
 A definition file is `module.exports = ` followed by JSON. Two markers stand in for what lives in other files: `{"$script": "Ping.test.js"}` where a script's lines go, and `{"$children": ["Ping.request.js", "Staff_picks/"]}` where a folder's content goes, in order.
 
