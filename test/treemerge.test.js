@@ -1,6 +1,6 @@
 'use strict';
 // Self-test for treemerge: the engine on its own, then real git merges, the terminal prompts and the browser UI's API.
-const fs = require('fs'), os = require('os'), path = require('path'), assert = require('assert'), http = require('http');
+const fs = require('fs'), os = require('os'), path = require('path'), assert = require('assert'), http = require('http'), net = require('net');
 const { spawnSync, spawn } = require('child_process');
 const ROOT = path.join(__dirname, '..'), TM = path.join(ROOT, 'treemerge.js'), FILE = 'Demo.postman_collection.json';
 const { mergeTexts } = require(TM);
@@ -205,6 +205,30 @@ R = repo(); branches(R, true); R.tm('install', '*.postman_collection.json');
 r = R.git('merge', 'dev'); assert.notStrictEqual(r.code, 0); assert.match(r.out, /2 real conflict\(s\) left/); R.read();
 r = R.tm('--no-ui', '--take-theirs', 'all'); assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /CONFLICTS: 0 need a decision {3}\(2 already settled\)/); ok('merge driver + real conflicts: git stops, the file stays valid, --take-theirs all finishes it');
 
+/* hardening: what a branch someone else wrote must not be able to do */
+R = repo(); branches(R, true); R.git('merge', 'dev');
+const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-outside-')), outsideFile = path.join(outsideDir, 'profile');
+fs.writeFileSync(outsideFile, 'keep me');
+let canLink = true;
+try { fs.symlinkSync(outsideFile, path.join(R.d, FILE + '.treemerge-tmp')); fs.symlinkSync(outsideFile, path.join(R.d, '.gitattributes')); } catch (e) { canLink = false; }   // not on every Windows setup
+r = R.tm('--no-ui'); assert.strictEqual(r.code, 1, r.out); checkCommon(R.read(), R.text());
+assert.strictEqual(R.tm('install', '*.postman_collection.json').code, 0);
+assert.strictEqual(fs.readFileSync(outsideFile, 'utf8'), 'keep me');
+if (canLink) { assert.ok(fs.lstatSync(path.join(R.d, '.gitattributes')).isFile()); assert.match(fs.readFileSync(path.join(R.d, '.gitattributes'), 'utf8'), /merge=treemerge/); }
+ok('a link planted at the old temporary path, or in place of .gitattributes, is replaced and never written through');
+
+R = repo(); branches(R, true); R.git('merge', 'dev');
+fs.mkdirSync(path.join(R.d, '.treemerge', 'planted'), { recursive: true }); fs.writeFileSync(path.join(R.d, '.treemerge', 'planted', 'choices.json'), '{}');
+R.git('add', '-f', '.treemerge');                                                                  // what a merged branch that tracks .treemerge/ leaves behind
+r = R.tm('--no-ui'); assert.strictEqual(r.code, 2, r.out); assert.match(r.out, /\.treemerge\/ is tracked by git/); assert.throws(() => R.read());
+R.git('rm', '-r', '-q', '--cached', '.treemerge'); fs.rmSync(path.join(R.d, '.treemerge'), { recursive: true, force: true });
+r = R.tm('--no-ui'); assert.strictEqual(r.code, 1, r.out); assert.match(r.out, /CONFLICTS: 2 need a decision/);
+if (canLink) {
+  fs.rmSync(path.join(R.d, '.treemerge'), { recursive: true, force: true }); fs.symlinkSync(outsideDir, path.join(R.d, '.treemerge'));
+  r = R.tm('--no-ui'); assert.strictEqual(r.code, 2, r.out); assert.match(r.out, /is not a plain folder/); assert.deepStrictEqual(fs.readdirSync(outsideDir), ['profile']);
+}
+ok('a .treemerge folder that git tracks, or that is a link to somewhere else, is refused instead of trusted');
+
 /* ───────── 3. the browser UI's server ───────── */
 (async () => {
   R = repo(); branches(R, true); R.git('merge', 'dev');
@@ -219,18 +243,26 @@ r = R.tm('--no-ui', '--take-theirs', 'all'); assert.strictEqual(r.code, 0, r.out
     const evil = await new Promise(res => http.get({ host: '127.0.0.1', port: +origin.split(':')[2], path: '/api/docs?k=' + k, headers: { Host: 'evil.example' } }, x => res(x.statusCode)));
     assert.strictEqual(evil, 403); assert.match(await (await fetch(url)).text(), /<title>treemerge<\/title>/);
     ok('UI server: this machine only, needs the secret link, rejects other Host names');
+    const firstLine = await new Promise(res => { let got = ''; const sock = net.connect(+origin.split(':')[2], '127.0.0.1', () => sock.write('GET //[ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n')); sock.on('data', d => { got += d; }); sock.on('close', () => res(got.split('\r\n')[0])); sock.on('error', () => res('socket error')); setTimeout(() => sock.destroy(), 3000); });
+    assert.match(firstLine, /^HTTP\/1\.1 400/); assert.strictEqual((await fetch(origin + '/api/docs?k=' + k)).status, 200);
+    ok('UI server: a request line that is not a URL gets 400 and the server keeps running');
     assert.deepStrictEqual((await call('/api/docs')).map(d => [d.file, d.open, d.profile]), [[FILE, 2, 'postman']]);
     const doc = await call('/api/doc?i=0'), [c1, c2] = doc.entries.filter(e => e.status === 'conflict');
     let d1 = await call('/api/entry?i=0&key=' + encodeURIComponent(c1.key)); const hunk = d1.chunks.find(x => x.t === 'conflict');
     assert.deepStrictEqual(hunk.both, ['    "friday",', '    "saturday"', '    "sunday"']);
     let res = await call('/api/choose?i=0', { key: c1.key, choice: { hunk: hunk.i, pick: 'ours+theirs' } }); assert.strictEqual(res.entry.status, 'conflict'); assert.match(res.entry.problem, /not valid JavaScript/);
-    res = await call('/api/choose?i=0', { key: c1.key, choice: { hunk: hunk.i, pick: { lines: ['    "friday",', '    "saturday",', '    "sunday"'] } } }); assert.strictEqual(res.entry.status, 'resolved');
+    const word = 'Pr' + String.fromCharCode(0xFC) + 'fgr' + String.fromCharCode(0xF6, 0xDF) + 'e';       // a word with three two-byte characters
+    const payload = Buffer.from(JSON.stringify({ key: c1.key, choice: { hunk: hunk.i, pick: { lines: ['    "friday",', '    "saturday",', '    "sunday" // ' + word] } } }), 'utf8');
+    const cut = payload.indexOf(Buffer.from(String.fromCharCode(0xFC), 'utf8')) + 1;                  // in the middle of the first of them
+    res = await new Promise((resolve, reject) => { const q = http.request({ host: '127.0.0.1', port: +origin.split(':')[2], path: '/api/choose?i=0&k=' + k, method: 'POST' }, x => { let b = ''; x.setEncoding('utf8'); x.on('data', d => { b += d; }); x.on('end', () => resolve(JSON.parse(b))); }); q.on('error', reject); q.setNoDelay(true); q.write(payload.subarray(0, cut)); setTimeout(() => q.end(payload.subarray(cut)), 200); });
+    assert.strictEqual(res.entry.status, 'resolved');
     const d2 = await call('/api/entry?i=0&key=' + encodeURIComponent(c2.key)); assert.ok(d2.absent.ours && /status\(204\)/.test(d2.theirs) && !d2.theirs.includes('\\r'));
     res = await call('/api/choose?i=0', { key: c2.key, choice: { side: 'theirs' } }); assert.strictEqual(res.doc.counts.conflict, 0);
     res = await call('/api/save', { add: true }); assert.match(res.messages[0], /saved and marked resolved \(git add\)/);
     await call('/api/close', {}); assert.strictEqual(await exit, 0);
     assert.strictEqual(R.git('status', '--porcelain').out.trim(), 'M  ' + FILE); checkCommon(R.read(), R.text());
-    ok('UI flow over its API: "both" that breaks the script is refused, an edited block is accepted, Save writes the file and stages it');
+    assert.ok(exec(R.read(), ...DAYS).join('\n').includes('"sunday" // ' + word), 'a character split across two pieces of the request was damaged');
+    ok('UI flow over its API: "both" that breaks the script is refused, an edited block (sent in two pieces, split inside a character) is accepted intact, Save writes the file and stages it');
   } finally { child.kill(); }
   console.log(`\nall ${n} treemerge checks passed`);
 })().catch(e => { console.error('\nTREEMERGE TEST FAILED\n' + (e.stack || e)); process.exit(1); });
