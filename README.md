@@ -569,7 +569,7 @@ git add -A collection-files path/to/Your.postman_collection.json && git commit -
 
 `tree finish` packs one last time, checks that the collection JSON holds every edit, and removes the files. What main receives is the collection JSON, with only the edited lines changed.
 
-If the collection JSON changes while the files are unpacked (main was merged into the branch, say), the next `tree pack` or test run merges your edits into the newer file and writes the files again from the result. From then on, changes are counted from that merged collection. If both sides changed the same value, it refuses and writes nothing. Git will not merge over a collection JSON with uncommitted changes from a test run: commit it first, or put it back with `git checkout -- path/to/Your.postman_collection.json` (the files hold your edits).
+If the collection JSON changes while the files are unpacked (main was merged into the branch, say), the next `tree pack` or test run merges your edits into the newer file and writes the files again from the result. From then on, changes are counted from that newer collection as it was found, so your edits stay edits. If both sides changed the same value, it refuses, names the places and writes nothing. Git will not merge over a collection JSON with uncommitted changes from a test run: commit it first, or put it back with `git checkout -- path/to/Your.postman_collection.json` (the files hold your edits).
 
 ### The files
 
@@ -577,7 +577,7 @@ If the collection JSON changes while the files are unpacked (main was merged int
 
 A definition file (every file that is not a script) is `module.exports = ` followed by JSON. It is read as data and never run. By hand you can do everything the page does: change a URL, a header, a body or a variable, edit the scripts, add a request (write its file and list it in `$children`), remove, reorder or rename.
 
-A file that no definition lists is not part of the collection. `tree status` marks it with `?`, the page points it out, and `tree finish` refuses to remove it.
+A file that no definition lists is not part of the collection. `tree status` marks it with `?`, the page points it out, and `tree finish` refuses to remove it. pmx never writes over such a file and never deletes one, unless you finish with `--remove-unlisted`. What a file manager or an editor leaves behind (`.DS_Store`, `Thumbs.db`, swap and backup files) is not counted.
 
 ### Commands
 
@@ -590,10 +590,12 @@ A file that no definition lists is not part of the collection. `tree status` mar
 | `tree unpack <collection.json> [--tree <folder>]` | Write the files as a temporary working copy. Default place: `.pmx/<name>/tree/` |
 | `tree ui [<collection.json>]` | Open the page. Unpacks first if nothing is unpacked yet. `--no-open` only prints the link |
 | `tree status` | What changed, file by file (since the last commit, or since the unpack), and whether the JSON holds it. `?` marks a file that nothing lists |
-| `tree pack [--ignore-whitespace]` | Build the collection JSON from the files. Only what changed moves |
-| `tree test [--environment <file>] [--folder <name>]` | Pack, then run newman. Each failing test is listed with its file and line |
-| `tree finish [--keep] [--force]` | For a temporary working copy: pack, check, and remove the files. Do this before merging. It stops if the folder holds files that nothing lists, unless `--force` |
+| `tree pack [--ignore-whitespace] [--force]` | For a temporary working copy: build the collection JSON from the files. Only what changed moves. If the collection changed meanwhile, the edits are merged into it; `--force` writes over it instead |
+| `tree test [--environment <file>] [--folder <name>]` | Build or pack, then run newman. Each failing test is listed with its file and line. `--folder` runs one folder or request; the name must be the only one of its kind. A run of no request at all counts as failed |
+| `tree finish [--keep] [--remove-unlisted]` | For a temporary working copy: pack, check, and remove the files. Do this before merging. It stops if the folder holds files that nothing lists, unless `--remove-unlisted`. `--keep` leaves the files where they are |
 | `tree check <collection.json> [--run]` | Measure the round trip without touching anything: unpack, build, compare. `--run` also compares newman results |
+
+An option that a command does not know is refused, and `--help` only prints the help.
 
 `tree pack` refuses a script that does not parse and a drop in the number of `pm.test` calls, as `pack` does. The count is per script. Removing a whole request, or a script from its definition, is your decision and is not refused.
 
@@ -620,7 +622,10 @@ Unlike `pack`, it treats an edit that only changes spacing as an edit, because a
 - Where the files are the source, a script whose lines end differently from line to line is made uniform the first time the JSON is built. `tree adopt` says how many lines that moves.
 - `tree import` finds a request again by its name, and by its place when exactly as many requests were renamed as are left over. A request that was both renamed and moved is taken for a new one.
 - Commit the collection before you unpack it into a folder you commit. Otherwise only your machine knows the unpacked version, and a fresh clone cannot tell what changed. `tree unpack` says so.
-- **Run this** finds its folder or request by name, so it needs a name that no other folder or request has.
+- `tree test --folder <name>` needs a name that no other folder or request has. **Run this** in the page has no such limit.
+- If a colleague changes the same value that you changed, on top of a collection you already packed, the next pack refuses and names the places. Make the files and the collection say the same there, then pack again.
+- Two requests of one name in a folder, one of them removed, and the collection changes underneath: the merged collection is right, but the files can no longer be told apart. `tree pack` says so and gives the command to unpack again.
+- If a file changes on disk while you type in the same form, the page loads the file again and the last keystrokes are lost. It says so.
 - This mode and Fix tests keep separate working copies. Use one at a time on a collection.
 - It needs `pmx-tree.js` and `pmx-tree.ui.html` next to `pmx.js`. With `treemerge.js` there too, the collection keeps its layout and `tree pack` can merge; without it, the file is written in plain JSON layout.
 
@@ -684,11 +689,11 @@ npm install
 npm test
 ```
 
-55 end-to-end checks:
+56 end-to-end checks:
 
 - **pmx** against a demo collection and a mock API: 23, including byte-identical round trips for 8 export shapes.
 - **treemerge** on its own, through real `git merge` runs, in the terminal, and over the browser UI's API: 19, including 1,500 random documents.
-- **The tree mode**: 13. Round trips of nine file layouts, a collection of about 1,700 requests and 250 random collections; edits through the files; what `tree pack` refuses; the files on a git branch from unpack to finish, also with a checkout that converts line ends; a collection that changes underneath (merged, clash refused, an edit made again, an edit taken back); spacing-only edits and files that nothing lists; the page's server (who may talk to it, every edit it can make, saves of an older copy refused, newman, and that nothing is read or written through a link); and the files as the source (adopt builds back byte for byte for nine layouts and 250 random collections, build, verify, a merge, an edited JSON, an export imported in place).
+- **The tree mode**: 14. Round trips of nine file layouts, a collection of about 1,700 requests and 250 random collections; edits through the files; what `tree pack` refuses; the files on a git branch from unpack to finish, also with a checkout that converts line ends; a collection that changes underneath (merged, clash refused, an edit made again, an edit taken back); spacing-only edits and files that nothing lists; the page's server (who may talk to it, every edit it can make, saves of an older copy refused, newman, and that nothing is read or written through a link); the files as the source (adopt builds back byte for byte for nine layouts and 250 random collections, build, verify, a merge, an edited JSON, an export imported in place); and what a second review found (a collection put back after a merge, a collection wrapped in `{"collection": ...}`, two requests of one name, clones that end lines differently, options that do not exist).
 
 The page itself has a separate check in a real browser. It needs Playwright, which the tool does not, so it is not part of `npm test`:
 

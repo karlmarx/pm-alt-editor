@@ -177,7 +177,7 @@ function h(tag, props, ...kids) {
   return add(el, kids);
 }
 function add(el, ...kids) { for (const kid of kids.flat(4)) if (kid != null && kid !== false) el.append(kid); return el; }   // strings become text nodes
-const S = { st: null, pending: null, sel: 'collection.js', node: null, nodeError: '', tab: 'main', view: 'node', diffMode: 'unified', open: null, filter: '', onlyChanged: false, adding: null, focus: null, query: '', running: false, token: 0, leave: null, rawDirty: false, bodies: new Map() };
+const S = { st: null, pending: null, sel: 'collection.js', node: null, nodeError: '', tab: 'main', view: 'node', diffMode: 'unified', open: null, filter: '', onlyChanged: false, adding: null, focus: null, query: '', running: false, token: 0, leave: null, rawDirty: false, bodies: new Map(), acting: false };
 try { if (localStorage.getItem('pmx-tree-diff') === 'split') S.diffMode = 'split'; } catch (e) { /* no storage: fine */ }
 
 /* ---------- talking to pmx ---------- */
@@ -218,8 +218,7 @@ function flush() { for (const key of [...saves.keys()]) saveNow(key); return cha
 async function ready() {
   if (S.leave) {
     const leave = S.leave, wrote = S.rawDirty;
-    if (!(await leave())) return false;
-    S.leave = null;
+    if (!(await leave())) return false;                      // (S.leave stays while the Raw tab is shown: Pack and Run leave the tab where it is)
     if (wrote) { await refresh(); await loadNode(); }        // what was written is what the other tabs must show
   }
   await flush();
@@ -250,7 +249,13 @@ async function select(id, opt) {
   if (S.node && S.tab === 'inherited' && S.node.kind === 'collection') S.tab = 'main';
   renderHeader(); renderTree(); renderMain();
 }
-async function reloadAll() { await flush(); await refresh(); if (S.st && !findIn(S.st.root, S.sel)) S.sel = 'collection.js'; await loadNode(); renderTree(); renderMain(); }
+async function reloadAll() {
+  await flush(); await refresh();
+  if (S.st && !findIn(S.st.root, S.sel)) S.sel = 'collection.js';
+  await loadNode();
+  if (saves.size || busy) { await flush(); await loadNode(); }   // something was typed while the files were read: read once more, so the form is not drawn from an older copy
+  renderTree(); renderMain();
+}
 async function show(view) { if (!(await ready())) return; S.view = view; if (view === 'node') await loadNode(); renderHeader(); renderTree(); renderMain(); }
 
 /* ---------- header ---------- */
@@ -508,6 +513,7 @@ function renderMain() {
   const main = $('main');
   S.token++;
   main.textContent = '';
+  if (S.view !== 'node') { S.leave = null; S.rawDirty = false; }
   renderBanners();
   if (S.view === 'changes') return viewChanges(main);
   if (S.view === 'preview') return viewPreview(main);
@@ -521,7 +527,11 @@ function renderNodeHead() {
   const head = $('nodehead'), tabs = $('tabs'), n = S.node;
   if (!head || !tabs || !n || !S.st) return;
   const hit = findIn(S.st.root, n.id), live = hit ? hit.node : { name: n.name, path: n.path, status: n.status, scripts: [] }, changed = isChanged(live);
-  const act = async (url, body, then) => { if (!(await ready())) return; const r = await guard(() => post(url, body)); if (r === undefined) return; if (then) await then(r); else await reloadAll(); };
+  const act = async (url, body, then) => {
+    if (S.acting) return;
+    S.acting = true;
+    try { if (!(await ready())) return; const r = await guard(() => post(url, body)); if (r === undefined) return; if (then) await then(r); else await reloadAll(); } finally { S.acting = false; }
+  };
   const remove = h('button', { class: 'small danger', onclick: async () => {
     if (remove.dataset.sure !== '1') { remove.dataset.sure = '1'; remove.dataset.at = String(Date.now()); remove.textContent = 'Really remove?'; setTimeout(() => { remove.dataset.sure = ''; remove.textContent = 'Remove'; }, 4000); return; }
     if (Date.now() - Number(remove.dataset.at) < 600) return;       // the second half of a double click is not an answer
@@ -592,26 +602,29 @@ const urlText = u => (typeof u === 'string' ? u : isObj(u) && typeof u.raw === '
 const inUrl = s => String(s).replace(/[#&]/g, c => (c === '#' ? '%23' : '%26'));      // written as they are, these two would end the value
 const keyInUrl = s => inUrl(s).replace(/=/g, '%3D');
 const asText = v => (v == null ? null : typeof v === 'string' ? v : JSON.stringify(v));
-function setUrl(req, raw) {
+function setUrl(req, raw, began) {
   if (typeof req.url === 'string') { req.url = raw; return; }
   if (!isObj(req.url)) setKey(req, 'url', {}, REQUEST_KEYS);
   const u = req.url, p = parseUrl(raw), put = (key, value) => { if (value === undefined) delete u[key]; else setKey(u, key, value, URL_KEYS); };
   put('raw', raw); put('protocol', p.protocol); put('host', p.host); put('port', p.port); put('path', p.path);
-  // A parameter that is still in the URL keeps everything it had (its description, a number as a number); it is
-  // found again by its name, not by its place. Switched-off parameters are not in the URL and stay where they were.
-  const old = Array.isArray(u.query) ? u.query.filter(isObj) : [], waiting = old.filter(q => !q.disabled);
+  // A parameter that is still in the URL keeps everything it had (its description, a number as a number); it is found
+  // again by its name, not by its place. Switched-off parameters are not in the URL and stay where they were.
+  // `began` is the list as it was when the typing began: a name that is half typed, or mistyped for a moment, finds
+  // its parameter again once it is whole.
+  const old = began || (Array.isArray(u.query) ? u.query.filter(isObj) : []), waiting = old.filter(q => !q.disabled), source = [];
   const next = p.query.map(q => {
     const at = waiting.findIndex(o => keyInUrl(String(o.key)) === q.key || String(o.key) === q.key);
-    if (at < 0) return q;
-    const [kept] = waiting.splice(at, 1), had = asText(kept.value);
+    if (at < 0) { source.push(null); return q; }
+    const [was] = waiting.splice(at, 1), kept = Object.assign({}, was), had = asText(was.value);
     if (!(q.value === had || (had != null && q.value === inUrl(had)))) kept.value = q.value;
+    source.push(was);
     return kept;
   });
   const all = [];
   let done = 0;
   for (const o of old) {
-    if (o.disabled) { all.push(o); continue; }
-    const at = next.indexOf(o);
+    if (o.disabled) { all.push(Object.assign({}, o)); continue; }
+    const at = source.indexOf(o);
     while (done <= at) all.push(next[done++]);
   }
   while (done < next.length) all.push(next[done++]);
@@ -676,7 +689,10 @@ function tabRequest(body) {
   const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
   if (typeof req.method === 'string' && !methods.includes(req.method)) methods.push(req.method);
   let query = null;
-  const urlIn = textInput(urlText(req.url), v => { setUrl(req, v); saveDef(); if (query) query.redraw(); }, { class: 'mono grow', 'aria-label': 'URL', placeholder: '{{baseUrl}}/path?key=value' });
+  let began = null;                                // the parameters as they were when the URL box got the cursor
+  const urlIn = textInput(urlText(req.url), v => { setUrl(req, v, began); saveDef(); if (query) query.redraw(); }, { class: 'mono grow', 'aria-label': 'URL', placeholder: '{{baseUrl}}/path?key=value' });
+  urlIn.addEventListener('focus', () => { began = isObj(req.url) && Array.isArray(req.url.query) ? req.url.query.filter(isObj).map(q => Object.assign({}, q)) : []; });
+  urlIn.addEventListener('blur', () => { began = null; });
   const card = h('div', { class: 'card' }, h('div', { class: 'line' }, dropdown(methods, req.method || 'GET', v => { setKey(req, 'method', v, REQUEST_KEYS); saveDef(); }, { class: 'mono', 'aria-label': 'Method' }), urlIn));
   if (typeof req.url !== 'string') {
     query = kv({ what: 'query parameter', list: () => (isObj(req.url) && Array.isArray(req.url.query) ? req.url.query : null),
@@ -856,7 +872,7 @@ async function viewChanges(main) {
   for (const c of list) {
     const letter = c.status === 'added' ? 'A' : c.status === 'removed' ? 'D' : 'M';
     main.append(h('div', { class: 'card' }, h('div', { class: 'scripthead' }, h('span', { class: 'badge ' + letter }, c.status), h('h2', {}, c.path.join(' / ') || c.name), h('span', { class: 'hint' }, c.kind), h('span', { class: 'grow' }),
-      c.status === 'removed' ? h('button', { class: 'small', onclick: async () => { if (await guard(() => post('/api/revert', { id: c.id }))) await reloadAll(); } }, 'Put back') : h('button', { class: 'small', onclick: () => select(c.id, { tab: 'main' }) }, 'Open')),
+      c.status === 'removed' ? h('button', { class: 'small', onclick: async () => { if (!(await guard(() => post('/api/revert', { id: c.id })))) return; await reloadAll(); if (!findIn(S.st.root, c.id)) note('It is listed in its folder again, but that folder was removed too. Put the folder back to see it.'); } }, 'Put back') : h('button', { class: 'small', onclick: () => select(c.id, { tab: 'main' }) }, 'Open')),
       c.files.map(f => fileDiff(f))));
   }
 }
@@ -916,6 +932,7 @@ async function pack() {
   if (r.errors.length) { note(PACK() + ' was refused:\n' + r.errors.join('\n'), 'bad'); S.view = 'preview'; }
   else if (isSource()) note(r.how === 'up to date' ? `${S.st.collection} was up to date.` : `Built ${S.st.collection}: +${r.added} −${r.removed} lines (${r.how}).`, 'good');
   else note(r.held ? `${S.st.collection} had changed and already held every edit. The files were written again from it.` : `Packed into ${S.st.collection}: +${r.added} −${r.removed} lines (${r.how}).` + (r.onto ? '\nThe files were written again from the merged result.' : ''), 'good');
+  if (r.apart) note(`Two requests or folders share a name, and the files can no longer be told apart from the newer collection. ${S.st.collection} is right and holds every edit. Close this page and unpack again with --force before you go on.`, 'bad');
   if (r.onto) await reloadAll(); else { await flush(); await refresh(); if (S.view !== 'node') renderMain(); }
   renderHeader();
 }
@@ -926,8 +943,9 @@ async function runTests(id) {
   let r;
   try { r = await post('/api/test', id ? { id } : {}); } catch (e) { note(e.message, 'bad'); }
   S.running = false;
-  if (r && r.errors.length) { note('The collection JSON could not be written from the files, so nothing was run:\n' + r.errors.join('\n'), 'bad'); S.view = 'preview'; }
-  else if (r) S.view = 'run';
+  if (S.rawDirty && !(await ready())) { renderHeader(); return; }      // the Raw text could not be written: stay on it (the results are under "Results")
+  if (r && r.errors.length) { note((r.merged ? '' : 'The collection JSON could not be written from the files, so nothing was run:\n') + r.errors.join('\n'), 'bad'); if (!r.merged) S.view = 'preview'; }
+  else if (r) { S.view = 'run'; if (r.run.merged) note(`${S.st.collection} had changed since it was unpacked. The edits from the files were merged into it, and the files were written again from the result.`); }
   await reloadAll(); renderHeader();
 }
 
@@ -955,6 +973,7 @@ window.addEventListener('focus', async () => {            // the files may have 
   const now = await get('/api/node', { id }).catch(() => null);
   if (!now || S.node !== was || S.sel !== id || saves.size || busy || S.rawDirty || picture(was) !== before) return;   // something was typed or chosen meanwhile: leave it
   if (picture(now) !== before) { S.node = now; renderMain(); }
+  else { was.rev = now.rev; now.scripts.forEach((x, i) => { if (was.scripts[i] && was.scripts[i].file === x.file) was.scripts[i].rev = x.rev; }); }
 });
 window.addEventListener('pagehide', () => { flush(); });
 window.addEventListener('beforeunload', e => { if (S.rawDirty) { e.preventDefault(); e.returnValue = ''; } });
