@@ -159,6 +159,11 @@ table.diff tr.gap td { text-align: center; color: var(--muted); background: var(
 const KEY = new URLSearchParams(location.search).get('k');
 const $ = id => document.getElementById(id);
 const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+/* The files are either a temporary working copy of the collection JSON ("Pack" writes them into it), or its source
+ * ("Build" generates it). pmx says which; the page only words things accordingly. */
+const isSource = () => !!S.st && S.st.role === 'source';
+const PACK = () => (isSource() ? 'Build' : 'Pack');
+const since = () => (S.st ? S.st.since : 'the collection as it was unpacked');
 function h(tag, props, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props || {})) {
@@ -260,14 +265,18 @@ function renderHeader() {
   $('file').textContent = st.collection; $('file').title = st.collection;
   const c = st.counts, total = c.modified + c.added + c.removed;
   const pc = $('pillChanges');
-  pc.textContent = total ? `${total} changed` : 'no changes'; pc.className = 'pill' + (total ? ' info' : '');
+  pc.className = 'pill' + (total ? ' info' : '');
   const pp = $('pillPack'), p = S.pending;
   if (!p) { pp.textContent = '…'; pp.className = 'pill'; }
-  else if (p.errors.length) { pp.textContent = `cannot pack: ${p.errors.length} problem${p.errors.length > 1 ? 's' : ''}`; pp.className = 'pill bad'; }
+  else if (p.errors.length) { pp.textContent = p.edited ? 'the JSON was edited directly' : `cannot ${isSource() ? 'build' : 'pack'}: ${p.errors.length} problem${p.errors.length > 1 ? 's' : ''}`; pp.className = 'pill bad'; }
+  else if (isSource()) { pp.textContent = p.packed ? 'the JSON is up to date' : `the JSON is behind: +${p.added} −${p.removed}`; pp.className = 'pill ' + (p.packed ? 'good' : 'warn'); }
   else if (p.held) { pp.textContent = 'the JSON changed: Pack to follow it'; pp.className = 'pill warn'; }
   else if (p.packed) { pp.textContent = total ? 'packed: the JSON holds every edit' : 'JSON untouched'; pp.className = 'pill' + (total ? ' good' : ''); }
   else { pp.textContent = `not packed yet: +${p.added} −${p.removed}`; pp.className = 'pill warn'; }
-  pp.title = p && !p.errors.length && !p.packed ? `The edits are in the files, not yet in ${st.collection} (+${p.added} −${p.removed} lines). Click to see them.` : 'Show what Pack writes into the collection JSON';
+  pp.title = p && !p.errors.length && !p.packed ? `The edits are in the files, not yet in ${st.collection} (+${p.added} −${p.removed} lines). Click to see them.` : `Show what ${PACK()} writes into the collection JSON`;
+  pc.textContent = total ? `${total} changed` + (isSource() ? ' since the last commit' : '') : 'no changes';
+  $('btnPack').textContent = isSource() ? 'Build JSON' : 'Pack';
+  $('btnRun').title = `${PACK()}, then run newman on the result`;
   const env = $('env');
   if (document.activeElement !== env) {
     env.textContent = '';
@@ -279,7 +288,7 @@ function renderHeader() {
   $('btnResults').textContent = run ? (run.pass ? `Results: ${run.total} pass` : `Results: ${run.failed} of ${run.total} fail`) : 'Results';
   $('btnRun').disabled = S.running; $('btnRun').textContent = S.running ? 'Running…' : 'Run tests';
   $('btnPack').disabled = S.running;
-  $('foot').textContent = `Working copy: ${st.tree}/  →  packs into ${st.collection}`;
+  $('foot').textContent = isSource() ? `Source: ${st.tree}/  →  generates ${st.collection}` : `Working copy: ${st.tree}/  →  packs into ${st.collection}`;
 }
 
 /* ---------- the tree on the left ---------- */
@@ -533,11 +542,11 @@ function renderNodeHead() {
   add(head, h('div', { class: 'crumbs' }, live.path.length > 1 ? live.path.slice(0, -1).join(' / ') + ' / ' : '', h('b', {}, live.name || '(no name)'), '  ',
     h('span', { class: 'hint' }, n.kind === 'collection' ? 'the collection itself' : n.kind), changed ? h('span', { class: 'badge ' + (live.status === 'added' ? 'A' : 'M') }, live.status === 'added' ? 'new' : 'changed') : null),
     h('span', { class: 'grow' }),
-    n.kind !== 'collection' ? h('button', { class: 'small', disabled: S.running, title: 'Pack, then run newman on this ' + n.kind + ' only', onclick: () => runTests(n.id) }, 'Run this') : null,
+    n.kind !== 'collection' ? h('button', { class: 'small', disabled: S.running, title: PACK() + ', then run newman on this ' + n.kind + ' only', onclick: () => runTests(n.id) }, 'Run this') : null,
     n.kind === 'request' ? h('button', { class: 'small', onclick: () => act('/api/duplicate', { id: n.id }, async r => { await refresh(); await select(r.id, { tab: 'main' }); }) }, 'Duplicate') : null,
     n.kind !== 'collection' ? h('button', { class: 'small', title: 'Move up', 'aria-label': 'Move up', onclick: () => act('/api/move', { id: n.id, by: -1 }) }, '↑') : null,
     n.kind !== 'collection' ? h('button', { class: 'small', title: 'Move down', 'aria-label': 'Move down', onclick: () => act('/api/move', { id: n.id, by: 1 }) }, '↓') : null,
-    changed && n.originalDef ? h('button', { class: 'small', title: n.kind === 'request' ? 'Put this request and its scripts back to what they were when the collection was unpacked' : 'Put the own fields and scripts of this ' + (n.kind === 'folder' ? 'folder' : 'collection') + ' back. What is in it stays as it is now', onclick: async () => { if (!(await ready())) return; for (const id of [n.id, ...n.scripts.filter(s => s.original != null).map(s => s.file)]) if ((await guard(() => post('/api/revert', { id }))) === undefined) break; await reloadAll(); } }, 'Revert') : null,
+    changed && n.originalDef ? h('button', { class: 'small', title: n.kind === 'request' ? 'Put this request and its scripts back to what they were in ' + since() : 'Put the own fields and scripts of this ' + (n.kind === 'folder' ? 'folder' : 'collection') + ' back. What is in it stays as it is now', onclick: async () => { if (!(await ready())) return; for (const id of [n.id, ...n.scripts.filter(s => s.original != null).map(s => s.file)]) if ((await guard(() => post('/api/revert', { id }))) === undefined) break; await reloadAll(); } }, 'Revert') : null,
     n.kind !== 'collection' ? remove : null);
   const labels = [['main', n.kind === 'request' ? 'Request' : n.kind === 'folder' ? 'Folder' : 'Collection', live.status === 'modified'], ['scripts', `Scripts (${live.scripts.length})`, live.scripts.some(s => s.status !== 'same')]]
     .concat(n.kind === 'collection' ? [] : [['inherited', 'Inherited', false]], [['changes', 'Changes', changed], ['raw', 'Raw', false]]);
@@ -780,10 +789,10 @@ function tabScripts(body) {
     const info = h('div', { class: 'hint' });
     const tell = r => {
       info.textContent = ''; info.className = 'hint' + (r.syntax ? ' bad' : '');
-      if (r.syntax) { info.textContent = 'Syntax error: ' + r.syntax + '   (Pack refuses a script that does not parse.)'; return; }
+      if (r.syntax) { info.textContent = 'Syntax error: ' + r.syntax + `   (${PACK()} refuses a script that does not parse.)`; return; }
       const dropped = r.testsBefore != null && r.tests < r.testsBefore;
       if (dropped) info.className = 'hint warn';
-      info.textContent = `Parses. ${r.tests} pm.test call${r.tests === 1 ? '' : 's'}` + (r.testsBefore != null && r.testsBefore !== r.tests ? ` (${r.testsBefore} when unpacked)` : '') + (dropped ? '. Pack refuses to drop tests.' : '.');
+      info.textContent = `Parses. ${r.tests} pm.test call${r.tests === 1 ? '' : 's'}` + (r.testsBefore != null && r.testsBefore !== r.tests ? ` (${r.testsBefore} before)` : '') + (dropped ? `. ${PACK()} refuses to drop tests.` : '.');
     };
     const ed = codeEditor(s.text, text => { s.text = text; later('script:' + s.file, () => saved(n, async () => { const r = await post('/api/script', { file: s.file, text: s.text, rev: s.rev }); s.rev = r.rev; tell(r); })); }, { label: `${LISTEN[s.listen] || s.listen} of ${n.name}`, min: 4, max: 34 });
     ed.dataset.file = s.file;
@@ -791,7 +800,7 @@ function tabScripts(body) {
     const fails = run ? run.assertions.filter(a => a.result === 'FAIL' && a.file === s.file) : [];
     body.append(h('div', { class: 'card' },
       h('div', { class: 'scripthead' }, h('h2', {}, LISTEN[s.listen] || s.listen), h('span', { class: 'fname' }, s.file), h('span', { class: 'grow' }),
-        s.original != null ? h('button', { class: 'small', title: 'Put this script back to what it was when the collection was unpacked', onclick: async () => { if (!(await ready())) return; if (await guard(() => post('/api/revert', { id: s.file }))) await reloadAll(); } }, 'Revert script') : h('span', { class: 'badge A' }, 'new')),
+        s.original != null ? h('button', { class: 'small', title: 'Put this script back to what it was in ' + since(), onclick: async () => { if (!(await ready())) return; if (await guard(() => post('/api/revert', { id: s.file }))) await reloadAll(); } }, 'Revert script') : h('span', { class: 'badge A' }, 'new')),
       ed, info,
       fails.map(a => h('div', { class: 'msg bad' }, h('button', { class: 'link', onclick: () => ed.goTo(a.line) }, `line ${a.line}`), `  failed in the last run: ${a.name} — ${a.message}`))));
   }
@@ -829,7 +838,7 @@ async function tabChanges(body) {
   if (!files || token !== S.token || S.tab !== 'changes' || !body.isConnected) return;
   const changed = files.filter(f => f.changed);
   body.textContent = '';
-  body.append(h('div', { class: 'line' }, h('span', { class: 'hint' }, 'Against the collection as it was when it was unpacked.'), h('span', { class: 'grow' }), diffToggle(() => renderTab())));
+  body.append(h('div', { class: 'line' }, h('span', { class: 'hint' }, `Against ${since()}.`), h('span', { class: 'grow' }), diffToggle(() => renderTab())));
   if (!changed.length) body.append(h('div', { class: 'empty' }, 'Nothing here was changed.'));
   for (const f of changed) body.append(fileDiff(f));
 }
@@ -856,7 +865,7 @@ function tabRaw(body) {
 /* ---------- views of the whole collection ---------- */
 async function viewChanges(main) {
   const token = S.token;
-  main.append(h('div', { class: 'nodehead' }, h('h2', {}, 'Every change against the collection as it was unpacked'), h('span', { class: 'grow' }), diffToggle(() => renderMain())));
+  main.append(h('div', { class: 'nodehead' }, h('h2', {}, `Every change against ${since()}`), h('span', { class: 'grow' }), diffToggle(() => renderMain())));
   const list = await guard(() => get('/api/changes'));
   if (!list || token !== S.token) return;
   if (!list.length) main.append(h('div', { class: 'empty' }, 'Nothing was changed yet.'));
@@ -869,22 +878,26 @@ async function viewChanges(main) {
 }
 async function viewPreview(main) {
   const token = S.token, st = S.st;
-  main.append(h('div', { class: 'nodehead' }, h('h2', {}, `What Pack writes into ${st.collection}`), h('span', { class: 'grow' }), diffToggle(() => renderMain()), h('button', { class: 'primary', disabled: S.running, onclick: pack }, 'Pack')));
-  main.append(h('div', { class: 'card' }, 'The files are a working copy. The collection JSON is what gets kept and merged:',
+  main.append(h('div', { class: 'nodehead' }, h('h2', {}, `What ${PACK()} writes into ${st.collection}`), h('span', { class: 'grow' }), diffToggle(() => renderMain()), h('button', { class: 'primary', disabled: S.running, onclick: pack }, isSource() ? 'Build JSON' : 'Pack')));
+  if (isSource()) main.append(h('div', { class: 'card' }, 'The files are the source. The collection JSON is generated from them:',
+    h('ol', { class: 'steps' }, h('li', {}, 'Edit here (or edit the files in ', h('code', {}, st.tree + '/'), ' by hand).'), h('li', {}, h('b', {}, 'Run tests'), ' builds the JSON and runs newman. ', h('b', {}, 'Build JSON'), ' only writes it.'),
+      h('li', {}, 'Commit the files and the JSON together. In a merge the files are what is merged; then build the JSON again.'),
+      h('li', {}, 'An export from Postman, or a JSON that was edited directly, comes into the files with ', h('code', {}, 'pmx tree import'), ' in the terminal.'))));
+  else main.append(h('div', { class: 'card' }, 'The files are a working copy. The collection JSON is what gets kept and merged:',
     h('ol', { class: 'steps' }, h('li', {}, 'Edit here (or edit the files in ', h('code', {}, st.tree + '/'), ' by hand).'), h('li', {}, h('b', {}, 'Run tests'), ' packs and runs newman. ', h('b', {}, 'Pack'), ' only writes the JSON.'),
       h('li', {}, 'Before the branch is merged, run ', h('code', {}, 'pmx tree finish'), ' in the terminal: it packs one last time and removes the files, so that only the collection JSON is merged.'))));
   const p = await guard(() => get('/api/preview'));
   if (!p || token !== S.token) return;
-  if (p.errors.length) { main.append(h('div', { class: 'banner bad', role: 'alert' }, 'Pack would be refused:\n' + p.errors.join('\n'))); return; }
+  if (p.errors.length) { main.append(h('div', { class: 'banner bad', role: 'alert' }, PACK() + ' would be refused:\n' + p.errors.join('\n'))); return; }
   if (p.onto) main.append(h('div', { class: 'banner warn' }, `${st.collection} was changed by something else since it was unpacked (a merge, perhaps). ` + (p.held ? 'It already holds every edit from the files. Pack writes the files again from it.' : 'Pack merges the edits from the files into it and then writes the files again from the result.')));
   if (!p.added && !p.removed) { main.append(h('div', { class: 'empty' }, 'The collection JSON would not change.')); return; }
-  main.append(h('div', { class: 'hint' }, `+${p.added} −${p.removed} lines against ${p.onto ? 'the file as it is now' : 'the version that was unpacked'}; ${p.how}. Every other line of the file stays byte for byte as it is.`), diffTable(p.lines, S.diffMode));
+  main.append(h('div', { class: 'hint' }, `+${p.added} −${p.removed} lines against ${p.onto || isSource() ? 'the file as it is now' : 'the version that was unpacked'}; ${p.how}. Every other line of the file stays byte for byte as it is.`), diffTable(p.lines, S.diffMode));
 }
 function viewRun(main) {
   const run = S.st && S.st.lastRun;
   main.append(h('div', { class: 'nodehead' }, h('h2', {}, 'Test results'), h('span', { class: 'grow' }), h('button', { class: 'primary', disabled: S.running, onclick: () => runTests() }, S.running ? 'Running…' : 'Run all tests')));
   if (S.running) main.append(h('div', { class: 'banner info' }, 'newman is running…'));
-  if (!run) { main.append(h('div', { class: 'empty' }, 'No run yet. "Run tests" packs the files into the collection JSON and runs newman on it.')); return; }
+  if (!run) { main.append(h('div', { class: 'empty' }, 'No run yet. "Run tests" writes the collection JSON from the files and runs newman on it.')); return; }
   main.append(h('div', { class: 'banner ' + (run.pass ? 'good' : 'bad') }, (run.pass ? `PASS — ${run.total} assertions, none failed` : `FAIL — ${run.failed} of ${run.total} assertions failed` + (run.errors.length ? `, ${run.errors.length} error${run.errors.length > 1 ? 's' : ''}` : ''))
     + `\n${run.only ? `Only "${run.only}" was run. ` : ''}Environment: ${run.environment || 'none'}. Finished ${new Date(run.at).toLocaleTimeString()}.`));
   const groups = new Map();
@@ -916,7 +929,8 @@ async function pack() {
   if (!(await ready())) return;
   const r = await guard(() => post('/api/pack'));
   if (!r) return;
-  if (r.errors.length) { note('Pack was refused:\n' + r.errors.join('\n'), 'bad'); S.view = 'preview'; }
+  if (r.errors.length) { note(PACK() + ' was refused:\n' + r.errors.join('\n'), 'bad'); S.view = 'preview'; }
+  else if (isSource()) note(r.how === 'up to date' ? `${S.st.collection} was up to date.` : `Built ${S.st.collection}: +${r.added} −${r.removed} lines (${r.how}).`, 'good');
   else note(r.held ? `${S.st.collection} had changed and already held every edit. The files were written again from it.` : `Packed into ${S.st.collection}: +${r.added} −${r.removed} lines (${r.how}).` + (r.onto ? '\nThe files were written again from the merged result.' : ''), 'good');
   if (r.apart) note(`Two requests or folders share a name, and the files can no longer be told apart from the newer collection. ${S.st.collection} is right and holds every edit. Close this page and unpack again with --force before you go on.`, 'bad');
   if (r.onto) await reloadAll(); else { await flush(); await refresh(); if (S.view !== 'node') renderMain(); }

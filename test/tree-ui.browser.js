@@ -464,11 +464,85 @@ async function main() {
 
     assert.deepStrictEqual(problems, [], 'the browser reported problems');
     ok('no console errors, no dialogs, and no request to anything but pmx on this machine');
+    await sourceRole(browser);
     console.log(`\nall ${passed} browser checks passed`);
   } finally {
     if (browser) await browser.close();
     ui.kill(); mock.kill();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/* The same page where the files are the source of the collection (tree adopt): changes are counted from the last
+ * commit, and the collection JSON is built from the files. */
+async function sourceRole(browser) {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'pmx-tree-src-'));
+  const git = (...args) => { const g = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: repo, encoding: 'utf8' }); assert.strictEqual(g.status, 0, 'git ' + args.join(' ') + ': ' + g.stderr); return g.stdout; };
+  const S = (...parts) => path.join(repo, 'Demo', ...parts), json = path.join(repo, 'Demo.postman_collection.json');
+  spawnSync(process.execPath, [path.join(ROOT, 'demo', 'make-demo.js'), repo], { env });
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.pmx/\n');
+  assert.strictEqual(spawnSync(process.execPath, [path.join(ROOT, 'pmx.js'), 'tree', 'adopt', 'Demo.postman_collection.json'], { cwd: repo }).status, 0);
+  git('init', '-q', '.'); git('add', '-A'); git('commit', '-qm', 'the files are the source');
+  const original = read(json);
+  const ui = spawn(process.execPath, [path.join(ROOT, 'pmx.js'), 'tree', 'ui', '--no-open'], { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    let printed = '';
+    const url = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('tree ui printed no link:\n' + printed)), 15000);
+      const seen = chunk => { printed += chunk; const m = /http:\/\/127\.0\.0\.1:\d+\/\?k=[0-9a-f]{32}/.exec(printed); if (m) { clearTimeout(timer); resolve(m[0]); } };
+      ui.stdout.on('data', seen); ui.stderr.on('data', seen);
+    });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const problems = [];
+    page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') problems.push(`[${m.type()}] ${m.text()}`); });
+    page.on('pageerror', e => problems.push('[error] ' + e.message));
+    const settled = async () => { await page.waitForFunction(() => document.getElementById('saved').textContent.startsWith('Every edit') && document.getElementById('pillPack').textContent !== '…'); await page.waitForTimeout(200); };
+    const pills = async () => [await page.locator('#pillChanges').innerText(), await page.locator('#pillPack').innerText()];
+    await page.goto(url);
+    await page.waitForSelector(row('Open orders'));
+    await settled();
+    assert.deepStrictEqual([...(await pills()), await page.locator('#btnPack').innerText(), await page.locator('#foot').innerText()], ['no changes', 'the JSON is up to date', 'Build JSON', 'Source: Demo/ → generates Demo.postman_collection.json']);
+    await page.click(row('Open orders'));
+    await page.click('#tabs button:has-text("Scripts")');
+    const tests = page.locator('#tabbody textarea.code').nth(1);
+    await tests.fill((await tests.inputValue()).replace('"in stock"', '"available"'));
+    await settled();
+    assert.deepStrictEqual(await pills(), ['1 changed since the last commit', 'the JSON is behind: +1 −1']);
+    assert.strictEqual(read(json), original, 'an edit reached the collection JSON before Build');
+    await page.click('#tabs button:has-text("Changes")');
+    await page.waitForSelector('#tabbody table.diff tr.add');
+    assert.match(await page.locator('#tabbody .hint').first().innerText(), /Against the last commit\./);
+    await page.click('#btnPack');
+    await page.waitForSelector('.note.good:has-text("Built Demo.postman_collection.json: +1")');
+    await settled();
+    assert.deepStrictEqual(await pills(), ['1 changed since the last commit', 'the JSON is up to date']);
+    assert.strictEqual(read(json), original.replace('\\"in stock\\"', '\\"available\\"'), 'Build moved more than the edited line');
+    git('commit', '-qam', 'an edit');                                              // a commit while the page is open: changes are counted from it
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await page.waitForFunction(() => document.getElementById('pillChanges').textContent === 'no changes');
+    await page.click(row('Ping'));                                                 // removing removes the files; put back returns them from the last commit
+    await page.click('#nodehead button:has-text("Remove")');
+    await page.waitForTimeout(700);
+    await page.click('#nodehead button:has-text("Really remove?")');
+    await page.waitForSelector('#tree button:has-text("Put back")');
+    assert.ok(!fs.existsSync(S('Smoke', 'Ping.request.js')) && !fs.existsSync(S('Smoke', 'Ping.test.js')));
+    await page.click('#tree button:has-text("Put back")');
+    await page.waitForSelector(row('Ping'));
+    await settled();
+    assert.deepStrictEqual([await page.locator('#pillChanges').innerText(), git('status', '--porcelain').trim()], ['no changes', '']);
+    fs.writeFileSync(json, read(json).replace('"name": "Ping"', '"name": "Ping (edited in the JSON)"'));   // somebody edits the generated file
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await page.waitForFunction(() => document.getElementById('pillPack').textContent === 'the JSON was edited directly');
+    await page.click('#btnPack');
+    await page.waitForSelector('.note.bad');
+    assert.match(await page.locator('.note.bad').innerText(), /Build was refused:[^]*was edited directly[^]*tree import/);
+    assert.ok(read(json).includes('Ping (edited in the JSON)'), 'a refused Build overwrote the edited JSON');
+    assert.deepStrictEqual(problems, []);
+    ok('where the files are the source: changes are counted from the last commit, Build writes the JSON, removing removes, and a JSON that was edited directly is not overwritten');
+    await page.close();
+  } finally {
+    ui.kill();
+    fs.rmSync(repo, { recursive: true, force: true });
   }
 }
 main().catch(error => { console.error('\nBROWSER CHECK FAILED\n' + (error.stack || error)); process.exit(1); });
