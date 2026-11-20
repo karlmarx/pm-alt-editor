@@ -140,11 +140,12 @@ function split(text, opt = {}) {
 const defText = (title, value) => `// ${String(title).replace(/[\r\n]+/g, ' ')}\n${DEF_START}${JSON.stringify(value, null, 2)};\n`;
 
 /* ───────────────────────── files -> collection ───────────────────────── */
+const MARKS = /^(<<<<<<<|>>>>>>>) /m;            // what git writes into a file it could not merge
 function parseDef(text, file) {
   const start = text.indexOf(DEF_START, text.startsWith('//') ? text.indexOf('\n') + 1 : 0), end = text.lastIndexOf(';');   // the first line may be a title, and a title may say anything
-  if (start < 0 || end < start) throw new Problem(`${file}: expected \`${DEF_START}{ ... };\``);
+  if (start < 0 || end < start) throw new Problem(MARKS.test(text) ? `${file}: git left merge conflict marks in it. Settle them in the file, then run the command again.` : `${file}: expected \`${DEF_START}{ ... };\``);
   let value;
-  try { value = JSON.parse(text.slice(start + DEF_START.length, end)); } catch (e) { throw new Problem(`${file}: the part after \`${DEF_START}\` is not valid JSON (${e.message})`); }
+  try { value = JSON.parse(text.slice(start + DEF_START.length, end)); } catch (e) { throw new Problem(MARKS.test(text) ? `${file}: git left merge conflict marks in it. Settle them in the file, then run the command again.` : `${file}: the part after \`${DEF_START}\` is not valid JSON (${e.message})`); }
   if (!isPlain(value)) throw new Problem(`${file}: expected an object after \`${DEF_START}\``);
   return value;
 }
@@ -192,7 +193,7 @@ function build(treeDir, manifest, baseText, opt = {}) {
   let withCr = 0, total = 0;
   JSON.stringify(base, (k, v) => { if (k === 'exec' && isStrings(v)) v.forEach(line => { total++; if (line.endsWith('\r')) withCr++; }); return v; });
   const crlf = withCr * 2 > total;
-  const errors = [], changed = [], ignored = [], open = new Set();
+  const errors = [], changed = [], ignored = [], placed = [], open = new Set();
   const readFile = opt.read || (file => { const abs = inTree(treeDir, file); return fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : null; });
   const defOf = file => { const text = readFile(file); if (text == null) throw new Problem(`${file} is missing`); return parseDef(text, file); };
 
@@ -201,18 +202,22 @@ function build(treeDir, manifest, baseText, opt = {}) {
     if (raw == null) throw new Problem(`${file} is missing`);
     const text = stripBom(raw);                  // an editor may have put a byte-order mark in front
     if (src) {
+      const finish = lines => {
+        const cr = ['all', 'none', 'inner'].includes(ref.$cr) ? ref.$cr : src.format.scriptCr;
+        const out = lines.map((line, i) => line + (cr === 'all' || (cr === 'inner' && i < lines.length - 1) ? '\r' : ''));
+        return ref.$as === 'string' ? out.join('\n') : out;
+      };
       const code = text.replace(/\r\n/g, '\n'), body = code.endsWith('\n') ? code.slice(0, -1) : code;       // the file's own last line break is not part of the script
       const lines = code === '' ? [] : body.split('\n'), before = src.head.get(file);
       if (before === undefined || before.replace(/\r\n/g, '\n') !== code) {           // new, or edited since the last commit: checked like any edit
         changed.push(file);
-        const problem = syntaxError(body, file);
-        if (problem) errors.push('SYNTAX ERROR ' + problem);
+        if (opt.unguarded) return finish(lines);                                         // (an import: the scripts come from the JSON that is taken in)
+        const problem = MARKS.test(body) ? `${file}: git left merge conflict marks in it. Settle them in the file, then run the command again.` : syntaxError(body, file);
+        if (problem) errors.push(MARKS.test(body) ? problem : 'SYNTAX ERROR ' + problem);
         const had = before === undefined ? 0 : countTests(before), has = countTests(body);
         if (has < had && !opt.allowTestRemoval) errors.push(`${file}: number of pm.test(...) calls dropped from ${had} to ${has} since ${src.since || 'the last commit'}. Tests must not be removed. (A human can override with --allow-test-removal.)`);
       }
-      const cr = ['all', 'none', 'inner'].includes(ref.$cr) ? ref.$cr : src.format.scriptCr;
-      const out = lines.map((line, i) => line + (cr === 'all' || (cr === 'inner' && i < lines.length - 1) ? '\r' : ''));
-      return ref.$as === 'string' ? out.join('\n') : out;
+      return finish(lines);
     }
     const known = manifest.scripts[file];
     const before = known ? originalExec(known.key) : undefined;
@@ -239,25 +244,31 @@ function build(treeDir, manifest, baseText, opt = {}) {
     return typeof before === 'string' ? m.lines.join('\n') : m.lines;
   }
 
-  function fill(copy, dir) {
+  function fill(copy, dir, trail) {              // trail: the names from the collection down to here, as scriptPlaces() makes them
     const node = {};
     for (const [k, v] of Object.entries(copy)) {
       if (k === 'event' && Array.isArray(v)) {
+        const nth = {};
         node.event = v.map(ev => {
+          const listen = isPlain(ev) ? String(ev.listen || 'script') : '';
+          if (isPlain(ev)) nth[listen] = (nth[listen] || 0) + 1;
           if (!isPlain(ev) || !isPlain(ev.script) || !isScriptRef(ev.script.exec)) return ev;
-          return Object.assign({}, ev, { script: Object.assign({}, ev.script, { exec: scriptLines(stays(dir, ev.script.exec.$script), ev.script.exec) }) });
+          const file = stays(dir, ev.script.exec.$script);
+          placed.push({ file, key: placeKey(trail, listen, nth[listen]) });
+          return Object.assign({}, ev, { script: Object.assign({}, ev.script, { exec: scriptLines(file, ev.script.exec) }) });
         });
       } else if (k === 'item' && oneKey(v, '$children')) {
         if (!Array.isArray(v.$children)) throw new Problem('$children must be a list of file and folder names');
+        const under = siblings(trail);
         node.item = v.$children.map(child => {
           const target = stays(dir, child);
           if (!String(child).endsWith('/')) {
-            const own = path.posix.dirname(target);                // a request's script pointers are relative to its own file
-            return fill(defOf(target), own === '.' ? '' : own);
+            const own = path.posix.dirname(target), def = defOf(target);   // a request's script pointers are relative to its own file
+            return fill(def, own === '.' ? '' : own, under(def));
           }
           if (open.has(target)) throw new Problem(`the folder ${target}/ contains itself`);
           open.add(target);
-          const folder = fill(defOf(target + '/folder.js'), target);
+          const def = defOf(target + '/folder.js'), folder = fill(def, target, under(def));
           open.delete(target);
           return folder;
         });
@@ -269,9 +280,29 @@ function build(treeDir, manifest, baseText, opt = {}) {
   let json;
   try {
     const top = defOf('collection.js');
-    json = isPlain(top.collection) && !top.item ? Object.assign({}, top, { collection: fill(top.collection, '') }) : fill(top, '');
+    json = isPlain(top.collection) && !top.item ? Object.assign({}, top, { collection: fill(top.collection, '', []) }) : fill(top, '', []);
   } catch (e) { if (!(e instanceof Problem)) throw e; errors.push(e.message); }
-  return { json, base, errors, changed, ignored };
+  return { json, base, errors, changed, ignored, placed };
+}
+
+/* Where every script of a collection sits: "Orders / Open orders :: test#1" -> its code. Two things of one name in a
+ * folder are told apart by their order. build() gives the scripts it places the same keys. */
+const placeKey = (trail, listen, n) => trail.join(' / ') + ' :: ' + listen + '#' + n;
+const siblings = trail => { const seen = {}; return item => { const name = String(item.name == null ? '' : item.name); seen[name] = (seen[name] || 0) + 1; return trail.concat(seen[name] > 1 ? `${name}~${seen[name]}` : name); }; };
+function scriptPlaces(json) {
+  const out = new Map();
+  (function walk(node, trail) {
+    const nth = {};
+    for (const ev of Array.isArray(node.event) ? node.event : []) {
+      if (!isPlain(ev)) continue;
+      const listen = String(ev.listen || 'script'), exec = isPlain(ev.script) ? ev.script.exec : undefined;
+      nth[listen] = (nth[listen] || 0) + 1;
+      if (isStrings(exec) || typeof exec === 'string') out.set(placeKey(trail, listen, nth[listen]), (typeof exec === 'string' ? exec.split('\n') : exec).map(line => line.replace(/\r$/, '')).join('\n'));
+    }
+    const under = siblings(trail);
+    for (const child of Array.isArray(node.item) ? node.item : []) if (isPlain(child)) walk(child, under(child));
+  })(isPlain(json) && isPlain(json.collection) && !json.item ? json.collection : isPlain(json) ? json : {}, []);
+  return out;
 }
 
 /* Turn the built collection into text. Where the original text is known, only what changed is laid out again and every
@@ -290,41 +321,66 @@ function render(baseText, base, json, file) {
  * A tree folder carries a small note (.pmx-tree.json): which collection it belongs to and the fingerprint of that
  * collection when it was unpacked. With that, the folder can sit in the scratch area or be committed on a branch. */
 function findTrees() {
-  const found = [], skip = new Set(['node_modules', '.git']);
+  const found = new Set(), skip = new Set(['node_modules', '.git']);
+  // What git knows or would add, at any depth (a collection often sits deep in a repository) ...
+  const ls = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', META, '*/' + META], { maxBuffer: 1 << 26 });
+  if (ls.status === 0) for (const f of ls.stdout.toString('utf8').split('\0')) if (f && path.posix.basename(f) === META && fs.existsSync(f)) found.add(path.resolve(path.dirname(f)));
+  // ... and what git ignores or does not see: the scratch folder, and a look around where there is no git.
   const walk = (dir, depth) => {
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
-    if (entries.some(e => e.isFile() && e.name === META)) { found.push(dir); return; }
+    if (entries.some(e => e.isFile() && e.name === META)) { found.add(path.resolve(dir)); return; }
     if (depth < 4) for (const e of entries) if (e.isDirectory() && !skip.has(e.name)) walk(path.join(dir, e.name), depth + 1);
   };
   walk(process.cwd(), 0);
-  return found;
+  return [...found].sort();
 }
+/* The folders of files that belong to one collection, with their role. */
+const treesOf = collection => findTrees().map(dir => { try { const m = readMeta(dir); return path.resolve(m.collection) === path.resolve(collection) ? { dir, role: m.role === 'source' ? 'source' : 'copy' } : null; } catch (e) { return null; } }).filter(Boolean);
 function readMeta(treeDir) {
   const file = inTree(treeDir, META);
   if (!fs.existsSync(file)) fail(`${rel(treeDir)} is not an unpacked collection (it has no ${META}). Run: ${pmx.SELF} tree unpack <collection.json>`);
   let meta;
   try { meta = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { fail(`${rel(file)} is not valid JSON`); }
   const sound = isPlain(meta) && (meta.role === 'source' ? isPlain(meta.format) : typeof meta.baseSha === 'string');
-  if (!sound || typeof meta.collection !== 'string' || !/\.json$/i.test(meta.collection) || !insideCwd(meta.collection)) fail(`${rel(file)} does not name a collection inside this folder. Run tree unpack again.`);
+  // Where the files are the source, the note is committed and read from anywhere: it names the JSON from its own folder.
+  if (sound && meta.role === 'source' && typeof meta.collection === 'string') meta.collection = path.relative(process.cwd(), path.resolve(treeDir, meta.collection)).split(path.sep).join('/');
+  if (!sound || typeof meta.collection !== 'string' || !/\.json$/i.test(meta.collection) || !insideCwd(meta.collection)) fail(`${rel(file)} does not name a collection inside this folder.` + (isPlain(meta) && meta.role === 'source' ? ' Run pmx from the root of the repository.' : ' Run tree unpack again.'));
   return meta;
 }
 function openTree(o = {}) {
   let treeDir = o.tree ? path.resolve(o.tree) : null;
   if (!treeDir) {
     let found = findTrees();
-    if (o.collection) found = found.filter(dir => { try { return path.resolve(readMeta(dir).collection) === path.resolve(o.collection); } catch (e) { return false; } });
-    if (!found.length) { const none = new Problem(`nothing is unpacked here yet. Run: ${pmx.SELF} tree unpack <collection.json>`); none.nothingUnpacked = true; throw none; }
-    if (found.length > 1) fail('more than one collection is unpacked here - say which with --tree <folder>:\n  ' + found.map(rel).join('\n  '));
+    const named = o.collection ? path.resolve(o.collection) : null, noteOf = dir => { try { return readMeta(dir); } catch (e) { return null; } }, of = dir => { const m = noteOf(dir); return m ? path.resolve(m.collection) : null; };
+    if (named) found = found.filter(dir => of(dir) === named);
+    if (!found.length) {
+      const none = new Problem(named && !fs.existsSync(named) ? `no such file: ${rel(named)}`
+        : `${named ? `${rel(named)} has no files here yet` : 'nothing is unpacked or adopted here yet'}. Run: ${pmx.SELF} tree adopt <collection.json> (the files become the source), or ${pmx.SELF} tree unpack <collection.json> (a temporary working copy)`);
+      none.nothingUnpacked = true;
+      throw none;
+    }
+    if (found.length > 1) {                      // the collection named in pmx.config.json decides, if it is one of them
+      let configured = null;
+      try { configured = path.resolve(String(JSON.parse(stripBom(fs.readFileSync('pmx.config.json', 'utf8'))).collection)); } catch (e) { configured = null; }
+      const mine = configured ? found.filter(dir => of(dir) === configured) : [];
+      if (mine.length === 1) found = mine;
+    }
+    if (found.length > 1) fail('more than one folder of files is here - say which with --tree <folder>:\n  ' + found.map(dir => { const m = noteOf(dir); return rel(dir) + (m ? `   (${m.role === 'source' ? 'the source of' : 'a temporary working copy of'} ${m.collection})` : ''); }).join('\n  '));
     treeDir = found[0];
   }
   if (!insideCwd(treeDir) || !reallyInsideCwd(treeDir)) fail('the tree folder must be inside the current folder');
   const meta = readMeta(treeDir);
+  if (o.tree && o.collection && path.resolve(meta.collection) !== path.resolve(o.collection)) fail(`${rel(path.resolve(o.collection))} is not the collection of ${rel(treeDir)}/ (that is ${meta.collection})`);
   if (!reallyInsideCwd(meta.collection) || isLink(meta.collection)) fail(`${rel(path.join(treeDir, META))} names a collection that is a link or is reached through one - refused`);
   if (!fs.existsSync(path.resolve(meta.collection)) && !fs.existsSync(path.dirname(path.resolve(meta.collection)))) fail(`${rel(path.join(treeDir, META))} names ${meta.collection}, and that place is not here. Run pmx from the folder where the files were unpacked (the repository root).`);
   const ctx = pmx.getCtx({ collection: meta.collection }, undefined);
   const ws = { treeDir, meta, collection: ctx.collection, baseCopy: ctx.f('tree-base.json'), packCopy: ctx.f('tree-pack.json') };
-  if (meta.role === 'source') { ws.role = 'source'; ws.packCopy = ctx.f('tree-built.json'); ws.baseText = null; sourceBaseline(ws); return ws; }
+  if (meta.role === 'source') {
+    if (o['ignore-whitespace']) fail('--ignore-whitespace is for a temporary working copy. Where the files are the source, a script file is the script: undo the spacing in the file.');
+    ws.role = 'source'; sourceScratch(ws, ctx); ws.baseText = null; sourceBaseline(ws);
+    return ws;
+  }
   ws.baseText = findBase(ws);
   ws.orig = split(ws.baseText);
   return ws;
@@ -332,8 +388,8 @@ function openTree(o = {}) {
 /* ───────────────────────── the files as the source ─────────────────────────
  * After `tree adopt` the folder is what is kept, reviewed and merged, and the collection JSON is generated from it.
  * "What changed" is then counted from the last commit: git is asked for the files as they are there. */
-function headFiles(treeDir) {                    // file -> text as in the last commit; null when git does not know the folder
-  const ls = spawnSync('git', ['ls-tree', '-r', '-z', 'HEAD', '--', rel(treeDir) + '/'], { maxBuffer: 1 << 28 });
+function filesAt(treeDir, ref) {                 // file -> text as in that commit; null when git does not know the folder there
+  const ls = spawnSync('git', ['ls-tree', '-r', '-z', ref, '--', rel(treeDir) + '/'], { maxBuffer: 1 << 28 });
   if (ls.status !== 0) return null;
   const prefix = rel(treeDir).split(path.sep).join('/') + '/';
   const blobs = ls.stdout.toString('utf8').split('\0').filter(Boolean).map(entry => /^(\d+) blob ([0-9a-f]+)\t(.*)$/s.exec(entry)).filter(m => m && m[1] !== '120000' && m[3].startsWith(prefix));
@@ -351,10 +407,15 @@ function headFiles(treeDir) {                    // file -> text as in the last 
   }
   return files;
 }
-const headSha = () => { const r = spawnSync('git', ['rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' }); return r.status === 0 ? r.stdout.trim() : ''; };
-const atHead = file => { const r = spawnSync('git', ['cat-file', '--filters', 'HEAD:./' + rel(file).split(path.sep).join('/')], { maxBuffer: 1 << 29 }); return r.status === 0 ? r.stdout.toString('utf8') : null; };
+const headFiles = treeDir => filesAt(treeDir, 'HEAD');
+const gitLine = args => { const r = spawnSync('git', args, { encoding: 'utf8', maxBuffer: 1 << 26 }); return r.status === 0 ? r.stdout.trim() : ''; };
+const headSha = () => gitLine(['rev-parse', '--verify', '-q', 'HEAD']);
+const posixRel = p => rel(p).split(path.sep).join('/');
+const textAt = (file, ref) => { const r = spawnSync('git', ['cat-file', '--filters', `${ref}:./${posixRel(file)}`], { maxBuffer: 1 << 29 }); return r.status === 0 ? r.stdout.toString('utf8') : null; };
+const jsonOf = text => { try { return text == null ? undefined : JSON.parse(stripBom(text)); } catch (e) { return undefined; } };
 function sourceBaseline(ws) {
   ws.head = headSha();
+  ws.generated = undefined;
   const committed = ws.head ? headFiles(ws.treeDir) : null;
   if (committed) { ws.orig = { files: committed, scripts: {} }; ws.since = 'the last commit'; return; }
   let files = null;                              // not committed yet: count from what the collection JSON says
@@ -364,23 +425,73 @@ function sourceBaseline(ws) {
 }
 const buildFiles = (ws, opt) => build(ws.treeDir, { scripts: {} }, null, Object.assign({}, opt, { source: { format: ws.meta.format, head: ws.orig.files, since: ws.since } }));
 
+/* What pmx built here is remembered by its fingerprint (in the scratch folder, never committed): such a file may be
+ * built over. Two collections may share a file name, so the scratch files carry a mark of the collection's path. */
+const sourceScratch = (ws, ctx) => { const mark = sha(posixRel(ws.collection)).slice(0, 8); ws.packCopy = ctx.f(`tree-built-${mark}.json`); ws.builtList = ctx.f(`tree-built-${mark}.txt`); };
+const builtHere = (ws, text) => (readIf(ws.builtList) || '').split('\n').includes(sha(text));
+const rememberBuilt = (ws, text) => { const all = (readIf(ws.builtList) || '').split('\n').filter(Boolean), mark = sha(text); if (!all.includes(mark)) cache(ws.builtList, all.concat(mark).slice(-200).join('\n') + '\n'); };
+const generatedFrom = (ws, files) => { const b = build(ws.treeDir, { scripts: {} }, null, { unguarded: true, read: f => (files.has(f) ? files.get(f) : null), source: { format: ws.meta.format, head: files } }); return b.errors.length ? undefined : b.json; };
+
+/* The collection JSON as it was generated last, as far as git can tell: the newest commit in which the JSON says
+ * exactly what the files of that commit say. Since then only the files may have moved on (the JSON is behind), or the
+ * JSON was changed directly. If no commit matches, it is the JSON the folder was adopted from. */
+function lastGenerated(ws) {
+  if (ws.generated !== undefined) return ws.generated;
+  ws.generated = null;
+  if (!ws.head) return null;
+  const LOOK = 40, commits = gitLine(['log', '-n', String(LOOK), '--format=%H', '--', posixRel(ws.collection), posixRel(ws.treeDir)]).split('\n').filter(Boolean);
+  let oldest = null, whole = commits.length < LOOK;   // whole: the list reaches back to the commit that brought the folder
+  for (const commit of commits) {
+    const files = filesAt(ws.treeDir, commit);
+    if (!files) { whole = true; break; }
+    const json = jsonOf(textAt(ws.collection, commit)), made = generatedFrom(ws, files);
+    if (json !== undefined && made !== undefined && same(json, made)) return (ws.generated = { commit, json });
+    oldest = { commit, json };
+  }
+  return (ws.generated = whole && oldest && oldest.json !== undefined ? oldest : null);
+}
+const merging = () => !!gitLine(['rev-parse', '-q', '--verify', 'MERGE_HEAD']) || !!gitLine(['rev-parse', '-q', '--verify', 'HEAD^2']);
+const editedDirectly = ws => `${rel(ws.collection)} was edited directly: it holds changes that the files do not have (made in Postman or by hand; a commit may have brought them).\n  Take them into the files with \`${pmx.SELF} tree import\`, or overwrite the file with \`${pmx.SELF} tree build --force\`.`
+  + (merging() ? '\n  (A merge is involved. If nobody edited the JSON by hand, this is git\'s own merge of the generated file, and --force is right.)' : '');
+
+/* The guards, measured against what the collection JSON holds now. A commit of the files does not switch them off:
+ * a script that differs from the JSON must parse, and must not have fewer pm.test calls than the JSON has there. */
+function guardAgainst(before, b, opt, label) {
+  const old = scriptPlaces(before), known = new Set(old.values()), now = scriptPlaces(b.json), errors = [];
+  for (const p of b.placed) {
+    const body = now.get(p.key), was = old.get(p.key);
+    if (body === undefined || body === was || (was === undefined && known.has(body))) continue;   // as the JSON has it, or only moved or renamed
+    if (!b.changed.includes(p.file)) { const problem = syntaxError(body, p.file); if (problem) errors.push('SYNTAX ERROR ' + problem); }   // (what differs from the last commit was checked when it was read)
+    const had = was === undefined ? 0 : countTests(was), has = countTests(body);
+    if (has < had && !opt.allowTestRemoval) errors.push(`${p.file}: number of pm.test(...) calls dropped from ${had} to ${has} against ${label}. Tests must not be removed. (A human can override with --allow-test-removal.)`);
+  }
+  return errors;
+}
+
 /* Generate the collection JSON from the files. The file keeps its layout where it has one; only what changed moves.
- * A JSON that somebody edited directly (it is neither what was built here last nor the committed version) is not
- * overwritten: `tree import` takes such changes into the files. A JSON that cannot be read (merge marks) is built anew. */
+ * A JSON that holds something the files do not have was edited directly, committed or not: it is not overwritten, and
+ * `tree import` takes such changes into the files. A JSON that cannot be read (merge marks) is built anew. */
 function buildSource(ws, opt = {}) {
   const b = buildFiles(ws, opt);
   if (b.errors.length) return { errors: b.errors };
-  const onDisk = fs.existsSync(ws.collection) ? readStrict(ws.collection) : null;
-  let was;
-  try { was = onDisk == null ? undefined : JSON.parse(stripBom(onDisk)); } catch (e) { was = undefined; }
+  const onDisk = fs.existsSync(ws.collection) ? readStrict(ws.collection) : null, was = jsonOf(onDisk);
   const current = was !== undefined && same(was, b.json);
-  if (!current && was !== undefined && !opt.force && onDisk !== readIf(ws.packCopy) && onDisk !== atHead(ws.collection)) {
-    return { errors: [`${rel(ws.collection)} was edited directly: it is neither what was built from the files last nor the committed version.\n  Take its changes into the files with \`${pmx.SELF} tree import\`, or overwrite it with \`${pmx.SELF} tree build --force\`.`], edited: true };
+  if (!current && was !== undefined && !opt.force && !builtHere(ws, onDisk)) {
+    const g = lastGenerated(ws);                 // not built here: then it must be what was generated last, with only the files moved on since
+    if (!(g && same(was, g.json))) return { errors: [editedDirectly(ws)], edited: true };
   }
-  const out = current ? { text: onDisk, how: 'up to date' } : was !== undefined ? render(onDisk, was, b.json, ws.collection) : { text: canonical(b.json, ws.meta.format), how: onDisk == null ? 'written new' : 'written new: the file could not be read as JSON (merge marks?)' };
+  if (!opt.unguarded) {
+    const before = was !== undefined ? was : ws.head ? jsonOf(textAt(ws.collection, 'HEAD')) : undefined;
+    const refused = before === undefined ? [] : guardAgainst(before, b, opt, rel(ws.collection)).filter(e => !b.errors.includes(e));
+    if (refused.length) return { errors: refused };
+  }
+  const eolOf = text => (text == null || !text.includes('\n') ? null : (text.match(/\r\n/g) || []).length * 2 > (text.match(/\n/g) || []).length ? '\r\n' : '\n');
+  const anew = () => canonical(b.json, Object.assign({}, ws.meta.format, { eol: eolOf(onDisk) || eolOf(ws.head ? textAt(ws.collection, 'HEAD') : null) || ws.meta.format.eol }));   // line ends as this checkout has them
+  const out = current ? { text: onDisk, how: 'up to date' } : was !== undefined ? render(onDisk, was, b.json, ws.collection) : { text: anew(), how: onDisk == null ? 'written new' : 'written new: the file could not be read as JSON (merge marks?)' };
   if (!opt.dry) {
     if (onDisk !== out.text) writeAtomic(ws.collection, out.text);
     cache(ws.packCopy, out.text);
+    rememberBuilt(ws, out.text);
   }
   const ops = diffOps((onDisk || '').split('\n'), out.text.split('\n'));
   return { errors: [], text: out.text, how: out.how, json: b.json, scripts: b.changed, ignored: [], added: ops.filter(x => x[0] === '+').length, removed: ops.filter(x => x[0] === '-').length, ops, base: onDisk || '', source: true };
@@ -391,31 +502,44 @@ function adoptTree(o, collectionArg) {
   const ctx = pmx.getCtx({ collection: o.collection }, collectionArg);
   if (!fs.existsSync(ctx.collection)) fail(`no such file: ${rel(ctx.collection)}`);
   const text = readStrict(ctx.collection);
-  const parsed = JSON.parse(stripBom(text)), top = isPlain(parsed) && isPlain(parsed.collection) && !parsed.item ? parsed.collection : parsed;
+  const parsed = jsonOf(text), top = isPlain(parsed) && isPlain(parsed.collection) && !parsed.item ? parsed.collection : parsed;
+  if (parsed === undefined) fail(`${rel(ctx.collection)} is not valid JSON`);
   if (!isPlain(top) || !Array.isArray(top.item)) fail(`${rel(ctx.collection)} does not look like a Postman collection (no "item" list)`);
   if (!insideCwd(ctx.collection) || !reallyInsideCwd(ctx.collection) || isLink(ctx.collection)) fail('the collection must be a file inside the current folder');
   const name = path.basename(ctx.collection).replace(/(\.postman_collection)?\.json$/i, '');
   const treeDir = o.tree ? path.resolve(o.tree) : path.join(path.dirname(ctx.collection), safe(name));
   if (!insideCwd(treeDir) || !reallyInsideCwd(treeDir)) fail('the folder must be inside the current folder');
-  if (fs.existsSync(treeDir) && fs.readdirSync(treeDir).length) fail(`${rel(treeDir)}/ exists and is not empty. Name a new folder with --tree <folder>.` + (fs.existsSync(path.join(treeDir, META)) ? ` (To take a collection into files that are already the source, use \`${pmx.SELF} tree import\`.)` : ''));
+  const others = treesOf(ctx.collection).filter(t => path.resolve(t.dir) !== treeDir);       // one collection, one folder of files
+  if (others.length) fail(`${rel(ctx.collection)} already has files: ${others.map(t => `${rel(t.dir)}/ (${t.role === 'source' ? 'the source of this collection' : 'a temporary working copy'})`).join(', ')}.\n  `
+    + (others[0].role === 'source' ? 'A collection has one source folder. Remove that folder first if a new one is to replace it.' : `Finish the working copy first (${pmx.SELF} tree finish --tree ${rel(others[0].dir)}), or remove it if its edits are not needed. Then adopt.`));
+  if (fs.existsSync(treeDir) && fs.readdirSync(treeDir).length) {
+    let role = null;
+    if (fs.existsSync(path.join(treeDir, META))) { try { role = readMeta(treeDir).role === 'source' ? 'source' : 'copy'; } catch (e) { role = 'copy'; } }
+    fail(role === 'source' ? `${rel(treeDir)}/ is already the source of a collection. To take a collection JSON into its files: ${pmx.SELF} tree import <collection.json> --tree ${rel(treeDir)}`
+      : role === 'copy' ? `${rel(treeDir)}/ is a temporary working copy (tree unpack). Finish it first (${pmx.SELF} tree finish --tree ${rel(treeDir)}), then adopt.`
+      : `${rel(treeDir)}/ exists and is not empty. Name a new folder with --tree <folder>.`);
+  }
   const parts = split(text, { source: true });
   writeFiles(treeDir, parts.files);
-  const ws = { treeDir, role: 'source', collection: ctx.collection, packCopy: ctx.f('tree-built.json'), meta: { version: 2, role: 'source', collection: rel(ctx.collection).split(path.sep).join('/'), format: parts.format } };
+  const ws = { treeDir, role: 'source', collection: ctx.collection, meta: { version: 2, role: 'source', collection: posixRel(ctx.collection), format: parts.format } };
+  sourceScratch(ws, ctx);
   saveMeta(ws);
   cache(ws.packCopy, text);
+  rememberBuilt(ws, text);
   sourceBaseline(ws);
   const dry = buildSource(ws, { dry: true });
   const names = [...parts.files.keys()];
   return { treeDir, collection: ctx.collection, files: parts.files.size, requests: names.filter(f => f.endsWith('.request.js')).length, folders: names.filter(f => f.endsWith('/folder.js')).length, scripts: Object.keys(parts.scripts).length,
-    exact: !dry.errors.length && dry.text === text, moves: dry.errors.length ? null : dry.added + dry.removed, mixed: parts.mixed, errors: dry.errors };
+    exact: !dry.errors.length && dry.text === text, moves: dry.errors.length ? null : Math.max(dry.added, dry.removed), mixed: parts.mixed, errors: dry.errors };
 }
 
 /* Take a collection JSON into the files: the collection file itself after somebody edited it, or an export from
  * Postman. What the files changed since the last commit is kept and merged with it; a clash is refused. The files are
  * then written again from the result, and the collection file is built from them. */
 function importTree(ws, from, opt = {}) {
-  const file = from ? path.resolve(from) : ws.collection;
-  if (!fs.existsSync(file)) fail(`no such file: ${rel(file)}`);
+  const file = from ? path.resolve(from) : ws.collection, found = lstatIf(file);
+  if (!found) fail(`no such file: ${rel(file)}`);
+  if (!found.isFile()) fail(`${rel(file)} is not a file`);
   const theirsText = readStrict(file);
   let theirs;
   try { theirs = JSON.parse(stripBom(theirsText)); } catch (e) { fail(`${rel(file)} is not valid JSON (${e.message})`); }
@@ -426,29 +550,31 @@ function importTree(ws, from, opt = {}) {
   if (!b.errors.length && same(theirs, b.json)) return { errors: [], same: true };
   let text = theirsText, how = 'taken as it is';
   if (!opt.theirs) {
-    const committed = ws.head ? headFiles(ws.treeDir) : null;
-    const was = committed ? build(ws.treeDir, { scripts: {} }, null, { allowTestRemoval: true, read: f => (committed.has(f) ? committed.get(f) : null), source: { format: ws.meta.format, head: committed } }) : null;
-    const baseText = was && !was.errors.length ? canonical(was.json, ws.meta.format) : readIf(ws.packCopy);
-    if (baseText == null) return { errors: [`there is no earlier version to compare with (the folder is not committed, and nothing was built here yet).\n  Import with --theirs to take ${rel(file)} as it is; edits in the files that are not in it are lost.`] };
+    // Both sides are compared with the collection as it was generated last. That does not move when the files are
+    // committed, so an edit in the files stays an edit until the JSON holds it.
+    const g = lastGenerated(ws), baseText = g ? canonical(g.json, ws.meta.format) : readIf(ws.packCopy);
+    if (baseText == null) return { errors: [`there is no earlier version to compare with (no commit holds this collection as the files generate it, and nothing was built here yet).\n  Import with --theirs to take ${rel(file)} as it is; edits in the files that are not in it are lost.`] };
     let merged = null;
     try { merged = require('./treemerge.js').mergeTexts({ file: ws.collection, base: baseText, ours: theirsText, theirs: canonical(b.json, ws.meta.format) }); } catch (e) { merged = null; }
-    if (!merged || merged.open) return { errors: [`${merged ? merged.open + ' place(s) were' : 'something was'} changed both in ${rel(file)} and in the files since ${ws.since}. The two cannot be combined automatically.\n  Commit or undo the edits in the files first, or import with --theirs to take ${rel(file)} as it is (the edits in the files are lost).`] };
-    text = merged.text; how = 'merged with the edits in the files';
+    if (!merged || merged.open) {
+      const places = merged ? merged.entries.filter(e => e.status === 'conflict').slice(0, 6).map(e => `\n    ${e.group}: ${e.field}`).join('') : '';
+      return { errors: [`${merged ? merged.open + ' place(s) were' : 'something was'} changed both in ${rel(file)} and in the files. The two cannot be combined automatically.${places}\n  Make the files and ${rel(file)} say the same in those places, then import again. Or import with --theirs to take ${rel(file)} as it is: what the files changed on their own is then lost, there and everywhere else.`] };
+    }
+    text = merged.text; how = same(jsonOf(baseText), b.json) ? 'the files had no changes of their own' : 'merged with the edits in the files';
   }
   const target = JSON.parse(stripBom(text));
   const touched = syncFiles(ws, target);
-  let again = buildFiles(ws, { allowTestRemoval: true });
+  let again = buildFiles(ws, { unguarded: true });
   if (again.errors.length || (!touched.mixed && !same(again.json, target))) {     // should not happen; then the folder is written anew, which is always right
     const fresh = split(text, { source: true, scriptCr: ws.meta.format.scriptCr });
-    const extra = describe(ws).unlisted.filter(f => !fresh.files.has(f)).map(f => [f, readText(ws, f)]);
-    for (const f of treeFiles(ws.treeDir)) fs.rmSync(inTree(ws.treeDir, f), { force: true });
+    const extra = describe(ws).unlisted.filter(f => !fresh.files.has(f));         // a person's own files stay as they are, byte for byte
+    for (const f of treeFiles(ws.treeDir)) if (!extra.includes(f)) fs.rmSync(inTree(ws.treeDir, f), { force: true });
     writeFiles(ws.treeDir, fresh.files);
-    writeFiles(ws.treeDir, extra.filter(([, t]) => t != null));
     how += '; the files were written anew, so some have new names';
-    again = buildFiles(ws, { allowTestRemoval: true });
+    again = buildFiles(ws, { unguarded: true });
   }
   (function prune(dir) { for (const e of fs.readdirSync(dir, { withFileTypes: true })) if (e.isDirectory()) { prune(path.join(dir, e.name)); if (!fs.readdirSync(path.join(dir, e.name)).length) fs.rmdirSync(path.join(dir, e.name)); } })(ws.treeDir);
-  const built = buildSource(ws, { force: true, allowTestRemoval: true });
+  const built = buildSource(ws, { force: true, unguarded: true });
   return { errors: built.errors, how, files: touched.written.length + touched.removed.length, written: touched.written, removed: touched.removed, mixed: touched.mixed };
 }
 
@@ -561,7 +687,7 @@ function rememberPack(ws, text) {
   ws.meta = Object.assign({}, ws.meta, { lastPackSha: fp(text), lastPackBlob: gitBlobOf(text, ws.collection) });
   saveMeta(ws);
 }
-const saveMeta = ws => writeAtomic(inTree(ws.treeDir, META), JSON.stringify(ws.meta, null, 1) + '\n');
+const saveMeta = ws => writeAtomic(inTree(ws.treeDir, META), JSON.stringify(ws.meta.role === 'source' ? Object.assign({}, ws.meta, { collection: path.relative(ws.treeDir, path.resolve(ws.meta.collection)).split(path.sep).join('/') }) : ws.meta, null, 1) + '\n');
 const buildTree = (ws, opt) => build(ws.treeDir, { scripts: ws.orig.scripts, files: ws.orig.files }, ws.baseText, opt);
 const writeFiles = (dir, files) => { for (const [file, content] of files) { const abs = path.join(dir, file); fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, content); } };
 
@@ -569,11 +695,14 @@ function unpackTree(o, collectionArg) {
   const ctx = pmx.getCtx({ collection: o.collection }, collectionArg);
   if (!fs.existsSync(ctx.collection)) fail(`no such file: ${rel(ctx.collection)}`);
   const text = readStrict(ctx.collection);
-  const parsed = JSON.parse(stripBom(text)), top = isPlain(parsed) && isPlain(parsed.collection) && !parsed.item ? parsed.collection : parsed;
+  const parsed = jsonOf(text), top = isPlain(parsed) && isPlain(parsed.collection) && !parsed.item ? parsed.collection : parsed;
+  if (parsed === undefined) fail(`${rel(ctx.collection)} is not valid JSON`);
   if (!isPlain(top) || !Array.isArray(top.item)) fail(`${rel(ctx.collection)} does not look like a Postman collection (no "item" list)`);
   if (!insideCwd(ctx.collection) || !reallyInsideCwd(ctx.collection) || isLink(ctx.collection)) fail('the collection must be a file inside the current folder');
   const treeDir = o.tree ? path.resolve(o.tree) : path.join(ctx.work, 'tree');
   if (!insideCwd(treeDir) || !reallyInsideCwd(treeDir)) fail('the tree folder must be inside the current folder');
+  const sources = treesOf(ctx.collection).filter(t => t.role === 'source' && path.resolve(t.dir) !== treeDir);
+  if (sources.length) fail(`${rel(ctx.collection)} is generated from ${rel(sources[0].dir)}/ (the files there are the source). Edit there, or in the page: ${pmx.SELF} tree ui`);
   if (fs.existsSync(treeDir) && !fs.existsSync(path.join(treeDir, META)) && fs.readdirSync(treeDir).length) fail(`${rel(treeDir)}/ exists and holds other files. Name a new or empty folder.`);
   if (fs.existsSync(path.join(treeDir, META))) { let role = null; try { role = readMeta(treeDir).role; } catch (e) { role = null; } if (role === 'source') fail(`${rel(treeDir)}/ is the source of its collection (it was adopted). To take a collection into it: ${pmx.SELF} tree import <collection.json>`); }
   if (fs.existsSync(path.join(treeDir, META)) && !o.force) {
@@ -1078,6 +1207,7 @@ function parse(argv) {
   const flags = new Set(['run', 'force', 'ignore-whitespace', 'allow-test-removal', 'no-open', 'keep', 'remove-unlisted', 'theirs', 'help']), values = new Set(['tree', 'collection', 'environment', 'folder', 'port']), o = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] === '-h' ? '--help' : argv[i];
+    if (/^-[A-Za-z]/.test(a)) fail(`unknown option ${a}. The options are listed by: ${pmx.SELF} tree --help`);
     if (!a.startsWith('--')) { o._.push(a); continue; }
     const k = a.slice(2);
     if (flags.has(k)) { o[k] = true; continue; }
@@ -1088,6 +1218,14 @@ function parse(argv) {
   }
   return o;
 }
+/* What each command reads. Anything else is refused, so an option never looks as if it had been applied. */
+const PACKING = ['force', 'ignore-whitespace', 'allow-test-removal'];
+const OPTIONS = {
+  unpack: ['tree', 'collection', 'force'], adopt: ['tree', 'collection'], import: ['tree', 'collection', 'theirs'], verify: ['tree', 'collection'],
+  pack: ['tree', 'collection', ...PACKING], build: ['tree', 'collection', ...PACKING], finish: ['tree', 'collection', 'keep', 'remove-unlisted', ...PACKING],
+  status: ['tree', 'collection', 'ignore-whitespace', 'allow-test-removal'], test: ['tree', 'collection', 'environment', 'folder', ...PACKING],
+  ui: ['tree', 'collection', 'port', 'no-open', 'environment'], check: ['collection', 'run'],
+};
 const packOptions = o => ({ ignoreWs: o['ignore-whitespace'], allowTestRemoval: o['allow-test-removal'], force: o.force, environment: o.environment });
 const treeArg = ws => (ws.treeDir === path.join(path.dirname(ws.baseCopy), 'tree') ? '' : ` --tree ${rel(ws.treeDir)}`);
 
@@ -1141,7 +1279,7 @@ function cmdStatus(o) {
   const dry = packTree(ws, Object.assign(packOptions(o), { dry: true }));
   if (dry.ignored && dry.ignored.length) console.log('  --ignore-whitespace: edits that only change spacing are left out in ' + dry.ignored.join(', '));
   if (source) {
-    if (dry.errors.length) dry.errors.forEach(e => console.log('  ERROR ' + e));
+    if (dry.errors.length) dry.errors.filter(e => !d.problems.includes(e)).forEach(e => console.log('  ERROR ' + e));
     else console.log(dry.how === 'up to date' ? `${rel(ws.collection)} is up to date with the files` : `${rel(ws.collection)} is behind the files (+${dry.added} -${dry.removed} lines). Run: ${pmx.SELF} tree build`);
     return 0;
   }
@@ -1214,7 +1352,7 @@ function cmdAdopt(o) {
   console.log(`next: commit ${rel(r.treeDir)}/. Edit there or in the page (${pmx.SELF} tree ui). After edits: ${pmx.SELF} tree build, and commit the JSON with the files. In CI: ${pmx.SELF} tree verify`);
   return 0;
 }
-/* For CI: is the collection JSON exactly what the files generate? */
+/* For CI: does the collection JSON hold exactly what the files generate? (The layout of the file is its own: a build keeps it.) */
 function cmdVerify(o) {
   const ws = openTree(o);
   if (ws.role !== 'source') fail(`tree verify is for files that are the source of their collection (see tree adopt). For a temporary working copy: ${pmx.SELF} tree status`);
@@ -1374,7 +1512,7 @@ function serve(ws, o = {}) {
         } catch (e) { send(res, e instanceof Problem && e.stale ? 409 : e instanceof Problem || e instanceof SyntaxError ? 400 : 500, { error: e instanceof Problem || e instanceof SyntaxError ? e.message : 'internal error: ' + e.message, stale: !!(e && e.stale) }); }
       });
     });
-    server.on('error', reject);
+    server.on('error', e => reject(e.code === 'EADDRINUSE' || e.code === 'EACCES' ? new Problem(`port ${o.port} cannot be used here (${e.code === 'EADDRINUSE' ? 'something else is listening on it' : 'not allowed'}). Leave --port away to get a free one.`) : e));
     server.listen(+o.port || 0, '127.0.0.1', () => {
       const url = `http://127.0.0.1:${server.address().port}/?k=${key}`;
       console.log(`\nthe collection is open for editing in your browser:\n  ${url}\n(edits are written to ${rel(ws.treeDir)}/ as you make them; press Ctrl+C here to stop)\n`);
@@ -1387,6 +1525,7 @@ function serve(ws, o = {}) {
   });
 }
 async function cmdUi(o) {
+  if (o.port !== undefined && !(/^\d+$/.test(o.port) && +o.port >= 1 && +o.port <= 65535)) fail('--port needs a number from 1 to 65535');
   const which = Object.assign({}, o, { collection: o.collection || o._[0] });
   let ws;
   try { ws = openTree(which); } catch (e) {
@@ -1406,7 +1545,7 @@ Two ways to use the files. Pick one per collection.
 A. The files are the source (they stay, are reviewed and merged; the JSON is generated):
   tree adopt <collection.json>    write every request, folder and script as its own file, in a folder next to the JSON
   tree build                      generate the collection JSON from the files; only what changed moves
-  tree verify                     for CI: fail unless the JSON is exactly what the files generate
+  tree verify                     for CI: fail unless the JSON holds exactly what the files generate
   tree import [<export.json>]     take a JSON that was edited directly, or an export from Postman, into the files
 
 B. The files are a temporary working copy (the JSON stays what you keep and merge):
@@ -1430,7 +1569,12 @@ The other pmx commands work exactly as before.`;
 async function run(argv) {
   try {
     const [sub, ...rest] = argv, o = parse(rest);
-    if (o.help) { console.log(HELP); return 0; }
+    if (o.help || sub === '-h') { console.log(HELP); return 0; }
+    if (OPTIONS[sub]) {
+      const stranger = Object.keys(o).find(k => k !== '_' && !OPTIONS[sub].includes(k));
+      if (stranger) fail(`tree ${sub} has no option --${stranger}. The options are listed by: ${pmx.SELF} tree --help`);
+      if (o._.length > 1) fail(`tree ${sub} takes one file at most; it got: ${o._.join(' ')}`);
+    }
     if (['pack', 'build', 'status', 'test', 'finish', 'verify'].includes(sub) && o._[0] && !o.collection) o.collection = o._[0];
     if (sub === 'unpack') return cmdUnpack(o);
     if (sub === 'adopt') return cmdAdopt(o);
@@ -1442,8 +1586,10 @@ async function run(argv) {
     if (sub === 'finish') return cmdFinish(o);
     if (sub === 'check') return await cmdCheck(o);
     if (sub === 'ui') return await cmdUi(o);
+    const known = !sub || sub === 'help' || sub === '--help';
+    if (!known) console.log(`pmx: there is no command \`tree ${sub}\`.\n`);
     console.log(HELP);
-    return sub && sub !== 'help' && sub !== '--help' ? 2 : 0;
+    return known ? 0 : 2;
   } catch (e) {
     if (!(e instanceof Problem)) throw e;
     console.error('pmx: ' + e.message);
