@@ -976,7 +976,8 @@ edits are dropped, syntax errors and removed pm.test() calls are refused.
 experimental (needs pmx-tree.js next to this file; see its --help):
   tree adopt | build | verify | import     the files are the source; the collection JSON is generated from them
   tree unpack | pack | finish              or: the files are a temporary working copy of the collection JSON
-  tree ui | status | test | check          both: a local page to edit requests, folders, variables and scripts`;
+  tree ui | status | test | check | new    both: a local page to edit requests, folders, variables and scripts;
+                                           new adds a request or a folder from the command line`;
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
