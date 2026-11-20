@@ -317,7 +317,7 @@ async function main() {
   assert.strictEqual(git(d8, 'diff', '--name-only', firstCommit + '~1', 'HEAD').trim(), 'Demo.postman_collection.json', 'what is merged is the collection JSON only');
   r = pmx(d8, 'tree', 'status');
   assert.strictEqual(r.code, 2);
-  assert.match(r.out, /nothing is unpacked here yet/);
+  assert.match(r.out, /nothing is unpacked or adopted here yet/);
   // a checkout that converts line ends (core.autocrlf, the default of Git for Windows): the unpacked version is still found in git
   const d8c = scratch(), C8c = path.join(d8c, 'Demo.postman_collection.json');
   makeDemo(d8c);
@@ -854,7 +854,7 @@ async function main() {
     fs.rmSync(note10); fs.symlinkSync(path.join(elsewhere10, 'note.json'), note10);
     r = pmx(d10, 'tree', 'pack');                                                   // a folder whose note is a link is not taken for a tree at all
     assert.strictEqual(r.code, 2, r.out);
-    assert.match(r.out, /nothing is unpacked here yet/);
+    assert.match(r.out, /nothing is unpacked or adopted here yet/);
     r = pmx(d10, 'tree', 'pack', '--tree', path.join('.pmx', 'Demo', 'tree'));
     assert.strictEqual(r.code, 2, r.out);
     assert.match(r.out, /\.pmx-tree\.json is a link, not a file - refused/);
@@ -888,11 +888,11 @@ async function main() {
   assert.match(r.out, /building from the files gives the same file, byte for byte/);
   assert.strictEqual(read(Cs), textS, 'adopting changed the collection file');
   const noteS = read(Ts('.pmx-tree.json'));
-  assert.deepStrictEqual(JSON.parse(noteS), { version: 2, role: 'source', collection: 'Demo.postman_collection.json', format: { indent: '\t', eol: '\n', bom: false, tail: '', scriptCr: 'inner' } });
+  assert.deepStrictEqual(JSON.parse(noteS), { version: 2, role: 'source', collection: '../Demo.postman_collection.json', format: { indent: '\t', eol: '\n', bom: false, tail: '', scriptCr: 'inner' } });
   assert.strictEqual(pmx(ds, 'tree', 'verify').code, 0);
   assert.match(pmx(ds, 'tree', 'build').out, /built -> Demo\.postman_collection\.json {3}\(it was up to date\)/);
   assert.match(pmx(ds, 'tree', 'status').out, /is the source of {2}Demo\.postman_collection\.json\nno changes since the collection JSON \(the folder is not committed yet\)\nDemo\.postman_collection\.json is up to date with the files/);
-  for (const [args, pattern] of [[['adopt', 'Demo.postman_collection.json'], /exists and is not empty[^]*tree import/], [['unpack', 'Demo.postman_collection.json', '--tree', 'Demo'], /is the source of its collection/], [['finish'], /is the source of Demo\.postman_collection\.json: it stays/]]) {
+  for (const [args, pattern] of [[['adopt', 'Demo.postman_collection.json'], /is already the source of a collection[^]*tree import/], [['unpack', 'Demo.postman_collection.json', '--tree', 'Demo'], /is the source of its collection/], [['finish'], /is the source of Demo\.postman_collection\.json: it stays/]]) {
     r = pmx(ds, 'tree', ...args);
     assert.strictEqual(r.code, 2, args.join(' ') + ': ' + r.out);
     assert.match(r.out, pattern, args.join(' '));
@@ -989,7 +989,7 @@ async function main() {
   const beforeClash = read(Cs);
   r = pmx(ds, 'tree', 'import', 'export.json');
   assert.strictEqual(r.code, 2, r.out);
-  assert.match(r.out, /TREE IMPORT REFUSED[^]*1 place\(s\) were changed both in export\.json and in the files since the last commit/);
+  assert.match(r.out, /TREE IMPORT REFUSED[^]*1 place\(s\) were changed both in export\.json and in the files\.[^]*Smoke \/ Ping[^]*say the same in those places/);
   assert.ok(read(Cs) === beforeClash && /Ping \(mine\)/.test(read(Ts('Smoke', 'Ping.request.js'))), 'a refused import wrote something');
   r = pmx(ds, 'tree', 'import', 'export.json', '--theirs');
   assert.strictEqual(r.code, 0, r.out);
@@ -1180,7 +1180,219 @@ async function main() {
   assert.ok(!read(path.join(copyB, 'Demo.postman_collection.json')).includes('\r\n') && parse(read(path.join(copyB, 'Demo.postman_collection.json'))).item[0].item[0].name === 'Ping the API');
   ok('a second review: edits survive a collection that is put back after a merge; strays are never overwritten or in the way unnoticed; removed-but-edited requests keep their edits; a script kept as one string, a byte-order mark, device names, a title like a definition and a slash too many are handled; unknown options are refused; clones with other line ends work');
 
-  // 14. fuzz: random collections must come back identical, and the writer must reproduce their bytes
+  // 14. what a review of the files as the source found
+  const adoptedRepo = (sub = '') => {                                                            // a repository with the demo adopted and committed
+    const d = scratch(), at = path.join(d, sub);
+    fs.mkdirSync(at, { recursive: true });
+    makeDemo(at);
+    fs.writeFileSync(path.join(d, '.gitignore'), '.pmx/\n');
+    git(d, 'init', '-q', '.'); git(d, 'add', '-A'); git(d, 'commit', '-qm', 'the collection');
+    const C = path.join(at, 'Demo.postman_collection.json'), relC = path.posix.join(sub, 'Demo.postman_collection.json');
+    assert.strictEqual(pmx(d, 'tree', 'adopt', relC).code, 0);
+    git(d, 'add', '-A'); git(d, 'commit', '-qm', 'adopt');
+    return { d, C, relC, T: (...parts) => path.join(at, 'Demo', ...parts) };
+  };
+  const sed = (file, from, to) => { const text = read(file); assert.ok(text.includes(from), file + ' has no ' + from); fs.writeFileSync(file, text.replace(from, to)); };
+
+  let v = adoptedRepo();                                                                         // a colleague edits the JSON in Postman and commits only the JSON
+  const pristine = read(v.C);
+  sed(v.C, '"raw": "{{baseUrl}}/health"', '"raw": "{{baseUrl}}/health?from=postman"');
+  git(v.d, 'commit', '-qam', 'the collection, from Postman');
+  const fromPostman = read(v.C);
+  r = pmx(v.d, 'tree', 'status');
+  assert.match(r.out, /was edited directly/);
+  assert.doesNotMatch(r.out, /is behind the files|tree build\n/);
+  r = pmx(v.d, 'tree', 'verify');
+  assert.strictEqual(r.code, 1, r.out);
+  assert.match(r.out, /was edited directly[^]*tree import/);
+  assert.doesNotMatch(r.out, /A merge is involved/);
+  for (const sub of ['build', 'test']) {
+    r = pmx(v.d, 'tree', sub);
+    assert.strictEqual(r.code, 2, sub + ': ' + r.out);
+    assert.match(r.out, /was edited directly/, sub);
+    assert.strictEqual(read(v.C), fromPostman, `tree ${sub} took a committed edit of the JSON out again`);
+  }
+  r = pmx(v.d, 'tree', 'import');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(read(v.T('Smoke', 'Ping.request.js')), /health\?from=postman/);
+  assert.strictEqual(pmx(v.d, 'tree', 'verify').code, 0);
+  git(v.d, 'add', '-A'); git(v.d, 'commit', '-qm', 'import');
+  sed(v.T('Smoke', 'Ping.test.js'), 'status(200)', 'status(204)');                             // the files are committed without a build: the JSON is behind, not edited
+  git(v.d, 'commit', '-qam', 'an edit, not built');
+  const behind = scratch();
+  git(behind, 'clone', '-q', v.d, 'copy');
+  r = pmx(path.join(behind, 'copy'), 'tree', 'status');
+  assert.match(r.out, /is behind the files \(\+1 -1 lines\)/);
+  r = pmx(path.join(behind, 'copy'), 'tree', 'build');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(read(path.join(behind, 'copy', 'Demo.postman_collection.json')), /status\(204\)/);
+
+  v = adoptedRepo();                                                                             // the same through a merge: the other branch edited the JSON directly, this one built from the files
+  const trunk = git(v.d, 'rev-parse', '--abbrev-ref', 'HEAD').trim();
+  git(v.d, 'checkout', '-q', '-b', 'postman');
+  sed(v.C, '"raw": "{{baseUrl}}/health"', '"raw": "{{baseUrl}}/health?from=postman"');
+  git(v.d, 'commit', '-qam', 'the collection, from Postman');
+  git(v.d, 'checkout', '-q', trunk);
+  sed(v.T('Orders', 'Open_orders.test.js'), '"in stock"', '"available"');
+  assert.strictEqual(pmx(v.d, 'tree', 'build').code, 0);
+  git(v.d, 'commit', '-qam', 'an edit in the files, built');
+  git(v.d, 'merge', '-q', '--no-edit', 'postman');
+  r = pmx(v.d, 'tree', 'build');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /was edited directly[^]*A merge is involved/);
+  assert.match(read(v.C), /health\?from=postman/);
+  assert.strictEqual(pmx(v.d, 'tree', 'import').code, 0);
+  assert.ok(/health\?from=postman/.test(read(v.T('Smoke', 'Ping.request.js'))) && /\\"available\\"/.test(read(v.C)) && pmx(v.d, 'tree', 'verify').code === 0, 'after the import, the files and the JSON do not hold both branches');
+
+  v = adoptedRepo();                                                                             // the guards are measured against the JSON: a commit of the files does not switch them off
+  sed(v.T('Smoke', 'Ping.test.js'), 'pm.response.to.have.status(200);', 'pm.response.to.have.status(200;');
+  assert.match(pmx(v.d, 'tree', 'build').out, /TREE BUILD REFUSED[^]*SYNTAX ERROR Smoke\/Ping\.test\.js/);
+  git(v.d, 'commit', '-qam', 'a script that does not parse');
+  r = pmx(v.d, 'tree', 'build');
+  assert.strictEqual(r.code, 2, 'after a commit of the files, a script that does not parse was built: ' + r.out);
+  assert.match(r.out, /SYNTAX ERROR Smoke\/Ping\.test\.js/);
+  r = pmx(v.d, 'tree', 'verify');
+  assert.strictEqual(r.code, 1, r.out);
+  assert.match(r.out, /SYNTAX ERROR Smoke\/Ping\.test\.js/);
+  assert.strictEqual(read(v.C), pristine);
+  git(v.d, 'revert', '--no-edit', 'HEAD');
+  const orders = v.T('Orders', 'Open_orders.test.js');
+  fs.writeFileSync(orders, read(orders).replace(/pm\.test\("There are open orders to look at"[\s\S]*?\n}\);\n/, ''));
+  git(v.d, 'commit', '-qam', 'a test removed');
+  r = pmx(v.d, 'tree', 'build');
+  assert.strictEqual(r.code, 2, 'after a commit of the files, a removed test was built: ' + r.out);
+  assert.match(r.out, /Orders\/Open_orders\.test\.js: number of pm\.test\(\.\.\.\) calls dropped from 2 to 1 against Demo\.postman_collection\.json/);
+  assert.strictEqual(read(v.C), pristine);
+  assert.strictEqual(pmx(v.d, 'tree', 'build', '--allow-test-removal').code, 0);
+  assert.strictEqual(pmx(v.d, 'tree', 'verify').code, 0);
+
+  v = adoptedRepo();                                                                             // pmx's own builds are never taken for an edit: a stash round trip, two collections of one file name
+  sed(v.T('Smoke', 'Ping.test.js'), 'status(200)', 'status(201)');
+  assert.strictEqual(pmx(v.d, 'tree', 'build').code, 0);
+  git(v.d, 'stash', '-q');
+  assert.strictEqual(pmx(v.d, 'tree', 'build').code, 0);
+  git(v.d, 'stash', 'pop', '-q');
+  sed(v.T('Smoke', 'Ping.test.js'), 'status(201)', 'status(202)');
+  r = pmx(v.d, 'tree', 'build');
+  assert.strictEqual(r.code, 0, 'a file that pmx had built itself was taken for an edited one: ' + r.out);
+  assert.match(read(v.C), /status\(202\)/);
+  const two = scratch();
+  for (const name of ['books', 'orders']) { fs.mkdirSync(path.join(two, name)); makeDemo(path.join(two, name)); fs.renameSync(path.join(two, name, 'Demo.postman_collection.json'), path.join(two, name, 'Api.postman_collection.json')); }
+  fs.writeFileSync(path.join(two, '.gitignore'), '.pmx/\n');
+  git(two, 'init', '-q', '.'); git(two, 'add', '-A'); git(two, 'commit', '-qm', 'two collections');
+  for (const name of ['books', 'orders']) assert.strictEqual(pmx(two, 'tree', 'adopt', `${name}/Api.postman_collection.json`).code, 0);
+  git(two, 'add', '-A'); git(two, 'commit', '-qm', 'adopt both');
+  for (const [name, from, to] of [['books', 'status(200)', 'status(201)'], ['orders', 'status(200)', 'status(202)'], ['books', 'status(201)', 'status(203)']]) {
+    sed(path.join(two, name, 'Api', 'Smoke', 'Ping.test.js'), from, to);
+    r = pmx(two, 'tree', 'build', '--tree', `${name}/Api`);
+    assert.strictEqual(r.code, 0, `${name}: ${r.out}`);
+  }
+  r = pmx(two, 'tree', 'status');                                                              // which of the two? Said, or named, or configured
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /more than one folder of files is here[^]*books\/Api {3}\(the source of books\/Api\.postman_collection\.json\)[^]*orders\/Api/);
+  assert.match(pmx(two, 'tree', 'status', 'orders/Api.postman_collection.json').out, /orders\/Api\/ {2}is the source of/);
+  fs.writeFileSync(path.join(two, 'pmx.config.json'), JSON.stringify({ collection: 'books/Api.postman_collection.json' }));
+  assert.match(pmx(two, 'tree', 'status').out, /books\/Api\/ {2}is the source of/);
+  r = pmx(two, 'tree', 'verify', 'orders/Api.postman_collection.json', '--tree', 'books/Api');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /orders\/Api\.postman_collection\.json is not the collection of books\/Api\//);
+  assert.match(pmx(two, 'tree', 'verify', 'nowhere.json').out, /no such file: nowhere\.json/);
+  assert.match(pmx(two, 'tree', 'import', 'a.json', 'b.json', '--tree', 'books/Api').out, /takes one file at most/);
+
+  v = adoptedRepo();                                                                             // an import clash stays a clash when the files are committed; nothing is dropped
+  sed(v.C, 'status(200)', 'status(418)');
+  sed(v.T('Smoke', 'Ping.test.js'), 'status(200)', 'status(201)');
+  sed(v.T('Orders', 'Open_orders.request.js'), '"method": "GET",', '"method": "GET", "description": "added in the files",');
+  r = pmx(v.d, 'tree', 'import');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /1 place\(s\) were changed both in Demo\.postman_collection\.json and in the files\.[^]*Smoke \/ Ping/);
+  assert.doesNotMatch(r.out, /Commit/);
+  git(v.d, 'add', 'Demo'); git(v.d, 'commit', '-qm', 'my edits in the files');
+  r = pmx(v.d, 'tree', 'import');
+  assert.strictEqual(r.code, 2, 'after a commit of the files, the import dropped their edits: ' + r.out);
+  assert.ok(/status\(201\)/.test(read(v.T('Smoke', 'Ping.test.js'))) && /added in the files/.test(read(v.T('Orders', 'Open_orders.request.js'))));
+  sed(v.T('Smoke', 'Ping.test.js'), 'status(201)', 'status(418)');                             // the files now say what the JSON says there
+  r = pmx(v.d, 'tree', 'import');
+  assert.strictEqual(r.code, 0, r.out);
+  const both = parse(read(v.C));
+  assert.ok(/status\(418\)/.test(both.item[0].item[0].event[0].script.exec.join('')) && both.item[2].item[0].request.description === 'added in the files', 'the import lost the edit that clashed with nothing');
+  assert.strictEqual(pmx(v.d, 'tree', 'verify').code, 0);
+
+  v = adoptedRepo('services/bookshop/api/tests/postman');                                        // a collection deep in the repository is found
+  r = pmx(v.d, 'tree', 'status');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /services\/bookshop\/api\/tests\/postman\/Demo\/ {2}is the source of/);
+  assert.strictEqual(pmx(v.d, 'tree', 'verify').code, 0);
+  assert.strictEqual(pmx(v.d, 'tree', 'build', v.relC).code, 0);
+  assert.ok(!fs.existsSync(path.join(v.d, '.pmx', 'Demo', 'tree')), 'a temporary working copy was made next to an adopted folder');
+
+  const sub14 = scratch();                                                                   // adopted from inside a subfolder: the note means the same at the root, and the other way round
+  fs.mkdirSync(path.join(sub14, 'api'));
+  makeDemo(path.join(sub14, 'api'));
+  fs.writeFileSync(path.join(sub14, '.gitignore'), '.pmx/\n');
+  git(sub14, 'init', '-q', '.'); git(sub14, 'add', '-A'); git(sub14, 'commit', '-qm', 'the collection');
+  assert.strictEqual(pmx(path.join(sub14, 'api'), 'tree', 'adopt', 'Demo.postman_collection.json').code, 0);
+  assert.strictEqual(JSON.parse(read(path.join(sub14, 'api', 'Demo', '.pmx-tree.json'))).collection, '../Demo.postman_collection.json');
+  git(sub14, 'add', '-A'); git(sub14, 'commit', '-qm', 'adopt');
+  for (const from of [sub14, path.join(sub14, 'api')]) {
+    r = pmx(from, 'tree', 'verify');
+    assert.strictEqual(r.code, 0, from + ': ' + r.out);
+    assert.match(pmx(from, 'tree', 'build').out, /it was up to date/);
+  }
+  assert.ok(!fs.existsSync(path.join(sub14, 'Demo.postman_collection.json')), 'a second collection JSON was written at the root');
+
+  v = adoptedRepo();                                                                             // one collection has one folder of files
+  r = pmx(v.d, 'tree', 'unpack', 'Demo.postman_collection.json');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /is generated from Demo\/ \(the files there are the source\)/);
+  r = pmx(v.d, 'tree', 'adopt', 'Demo.postman_collection.json', '--tree', 'Demo2');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /already has files: Demo\/ \(the source of this collection\)/);
+  assert.ok(!fs.existsSync(path.join(v.d, 'Demo2')) && !fs.existsSync(path.join(v.d, '.pmx', 'Demo', 'tree')));
+  const mixed = scratch();
+  makeDemo(mixed);
+  assert.strictEqual(pmx(mixed, 'tree', 'unpack', 'Demo.postman_collection.json').code, 0);
+  r = pmx(mixed, 'tree', 'adopt', 'Demo.postman_collection.json');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /already has files: \.pmx\/Demo\/tree\/ \(a temporary working copy\)[^]*tree finish --tree \.pmx\/Demo\/tree/);
+  assert.strictEqual(pmx(mixed, 'tree', 'finish').code, 0);
+  assert.strictEqual(pmx(mixed, 'tree', 'unpack', 'Demo.postman_collection.json', '--tree', 'files').code, 0);
+  r = pmx(mixed, 'tree', 'adopt', 'Demo.postman_collection.json', '--tree', 'files');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /files\/ is a temporary working copy[^]*tree finish --tree files/);
+
+  v = adoptedRepo();                                                                             // the command line: an option belongs to its commands; no stack traces
+  for (const [args, pattern] of [[['verify', '--force'], /tree verify has no option --force/], [['status', '--keep'], /tree status has no option --keep/], [['import', '--force'], /tree import has no option --force/], [['build', '--theirs'], /tree build has no option --theirs/],
+    [['adopt', 'x.json', '--force'], /tree adopt has no option --force/], [['build', '-f'], /unknown option -f/], [['build', '--ignore-whitespace'], /--ignore-whitespace is for a temporary working copy/], [['bulid'], /there is no command `tree bulid`/],
+    [['ui', '--no-open', '--port', 'abc'], /--port needs a number/], [['import', 'Demo'], /Demo is not a file/]]) {
+    r = pmx(v.d, 'tree', ...args);
+    assert.strictEqual(r.code, 2, args.join(' ') + ': ' + r.out);
+    assert.match(r.out, pattern, args.join(' '));
+    assert.doesNotMatch(r.out, /\n\s+at /, args.join(' ') + ' printed a stack trace');
+  }
+  assert.strictEqual(pmx(v.d, 'tree', '-h').code, 0);
+  fs.writeFileSync(path.join(v.d, 'broken.json'), '{ "info": { "name": "x" }, "item": [ }');
+  for (const sub of ['adopt', 'unpack']) {
+    r = pmx(v.d, 'tree', sub, 'broken.json');
+    assert.strictEqual(r.code, 2, r.out);
+    assert.match(r.out, /broken\.json is not valid JSON/);
+    assert.doesNotMatch(r.out, /\n\s+at /);
+  }
+  for (const file of [v.T('Smoke', 'Ping.request.js'), v.T('Smoke', 'Ping.test.js')]) {       // git could not merge a file: said in those words
+    const whole = read(file);
+    fs.writeFileSync(file, '<<<<<<< HEAD\n' + whole + '=======\n' + whole + '>>>>>>> other\n');
+    for (const sub of ['status', 'build', 'verify']) assert.match(pmx(v.d, 'tree', sub).out, /Smoke\/Ping\.(request|test)\.js: git left merge conflict marks in it/, sub);
+    fs.writeFileSync(file, whole);
+  }
+  const noteV = v.T('.pmx-tree.json');                                                       // the note was written on a checkout with other line ends: a file written anew follows this checkout
+  fs.writeFileSync(noteV, read(noteV).replace('"eol": "\\n"', '"eol": "\\r\\n"'));
+  fs.rmSync(v.C);
+  r = pmx(v.d, 'tree', 'build');
+  assert.match(r.out, /written new/);
+  assert.strictEqual(read(v.C), pristine, 'a collection written anew does not have the line ends of this checkout');
+  ok('a review of the files as the source: a committed edit of the JSON is not built over but imported; a JSON that is only behind is built; the guards hold after a commit of the files; pmx\'s own builds are not taken for edits; an import clash stays one after a commit; a deep collection and a folder adopted from a subfolder are found; one collection has one folder; options belong to their commands');
+
+  // 15. fuzz: random collections must come back identical, and the writer must reproduce their bytes
   let checkedWriter = 0;
   for (let round = 0; round < 250; round++) {
     const random = seeded(1000 + round);
