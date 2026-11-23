@@ -12,6 +12,7 @@
  *   tree status                     what differs from the collection as it was unpacked
  *   tree pack                       build the collection from the files and write it, keeping the file's own layout
  *   tree test                       pack, then run newman on the result
+ *   tree new "<Folder / Name>"      add a request with its two empty script files, or a folder (--folder "<path>")
  *   tree finish                     pack, check, and remove the files again (do this before merging)
  *   tree check <collection.json>    measure the round trip of a collection without touching anything
  *
@@ -949,25 +950,71 @@ function freeName(ws, dir, stem, suffix) {
   for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${stem}~${n}${suffix}`;
   return name;
 }
-function addNode(ws, parentId, kind, name) {
+/* The name of a new file or folder: safe for every system, and never one of the names Windows keeps for devices. */
+const stemFor = name => { const s = safe(name), dot = s.indexOf('.'), first = dot < 0 ? s : s.slice(0, dot); return RESERVED.test(first) ? first + '_' + s.slice(first.length) : s; };
+/* A URL as Postman stores it: the text ("raw") and its parts. newman sends nothing when only the text is there.
+ * The page reads a URL the same way (parseUrl in pmx-tree.ui.html); keep the two in step. */
+function urlParts(raw) {
+  let rest = raw, i = rest.indexOf('#');
+  const u = { raw }, hash = i < 0 ? undefined : rest.slice(i + 1);
+  if (i >= 0) rest = rest.slice(0, i);
+  i = rest.indexOf('?');
+  const query = i < 0 ? [] : rest.slice(i + 1).split('&').filter(x => x !== '').map(pair => { const e = pair.indexOf('='); return e < 0 ? { key: pair, value: null } : { key: pair.slice(0, e), value: pair.slice(e + 1) }; });
+  if (i >= 0) rest = rest.slice(0, i);
+  const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(rest);
+  if (m) { u.protocol = m[1]; rest = rest.slice(m[0].length); }
+  i = rest.indexOf('/');
+  let host = i < 0 ? rest : rest.slice(0, i);
+  const port = /:([0-9]+|\{\{[^{}]+\}\})$/.exec(host);
+  if (port) host = host.slice(0, port.index);
+  if (host !== '') u.host = host.split(/\.(?![^{]*\}\})/);                 // split on dots, but not inside {{...}}
+  if (port) u.port = port[1];
+  if (i >= 0) u.path = rest.slice(i + 1).split('/');
+  if (query.length) u.query = query;
+  if (hash !== undefined) u.hash = hash;
+  return u;
+}
+const usuallyHasBody = method => ['POST', 'PUT', 'PATCH'].includes(method);
+/* Add a request or a folder at the end of a folder (or of the collection). With opt.scripts a request also gets its
+ * two script files, empty: that is what `tree new` makes. If a write fails, what this call made is removed again. */
+function addNode(ws, parentId, kind, name, opt) {
   const { node: parent } = findNode(ws, parentId);
   if (parent.kind === 'request') fail('a request cannot contain other requests');
   if (typeof name !== 'string' || !name.trim()) fail('give it a name');
   const def = readDef(ws.treeDir, parentId), body = bodyOf(def, parent.kind);
   if (!isPlain(body.item) || !Array.isArray(body.item.$children)) fail(`${parentId} has no list of children to add to`);
+  const at = file => (parent.dir ? parent.dir + '/' + file : file), made = [];
   let pointer, id;
-  if (kind === 'folder') {
-    const dirName = freeName(ws, parent.dir, safe(name), '');
-    const dir = parent.dir ? parent.dir + '/' + dirName : dirName;
-    id = dir + '/folder.js'; pointer = dirName + '/';
-    writeText(ws, id, defText(parent.path.concat(name).join(' / ') + '   (folder)', { name, item: { $children: [] } }));
-  } else if (kind === 'request') {
-    const file = freeName(ws, parent.dir, safe(name), '.request.js');
-    id = parent.dir ? parent.dir + '/' + file : file; pointer = file;
-    writeText(ws, id, defText(parent.path.concat(name).join(' / '), { name, request: { method: 'GET', header: [], url: { raw: '' } }, response: [] }));
-  } else fail('add a "request" or a "folder"');
-  body.item.$children.push(pointer);
-  writeDef(ws, parentId, def);
+  try {
+    if (kind === 'folder') {
+      const dirName = freeName(ws, parent.dir, stemFor(name), '');
+      id = at(dirName) + '/folder.js'; pointer = dirName + '/';
+      made.push(at(dirName));
+      writeText(ws, id, defText(parent.path.concat(name).join(' / ') + '   (folder)', { name, item: { $children: [] } }));
+    } else if (kind === 'request' && opt && opt.scripts) {
+      const abs = inTree(ws.treeDir, parent.dir || '.'), taken = new Set(fs.existsSync(abs) ? fs.readdirSync(abs).map(n => n.toLowerCase()) : []);
+      const base = stemFor(name), kinds = ['prerequest', 'test', 'request'];           // the three files share one stem
+      let stem = base;
+      for (let n = 2; kinds.some(k => taken.has(`${stem}.${k}.js`.toLowerCase())); n++) stem = `${base}~${n}`;
+      const method = String(opt.method || 'GET').toUpperCase(), withBody = usuallyHasBody(method);
+      const request = { method, header: withBody ? [{ key: 'Content-Type', value: 'application/json' }] : [] };
+      if (withBody) request.body = { mode: 'raw', raw: '', options: { raw: { language: 'json' } } };
+      request.url = urlParts(String(opt.url || ''));
+      const event = ['prerequest', 'test'].map(listen => ({ listen, script: { type: 'text/javascript', exec: { $script: `${stem}.${listen}.js` } } }));
+      pointer = stem + '.request.js'; id = at(pointer);
+      for (const k of kinds) { made.push(at(`${stem}.${k}.js`)); writeText(ws, at(`${stem}.${k}.js`), k === 'request' ? defText(parent.path.concat(name).join(' / '), { name, event, request, response: [] }) : ''); }
+    } else if (kind === 'request') {
+      const file = freeName(ws, parent.dir, stemFor(name), '.request.js');
+      id = at(file); pointer = file;
+      made.push(id);
+      writeText(ws, id, defText(parent.path.concat(name).join(' / '), { name, request: { method: 'GET', header: [], url: { raw: '' } }, response: [] }));
+    } else fail('add a "request" or a "folder"');
+    body.item.$children.push(pointer);
+    writeDef(ws, parentId, def);
+  } catch (e) {                                  // leave no file behind that nothing lists
+    for (const file of made.reverse()) { try { fs.rmSync(inTree(ws.treeDir, file), { recursive: true, force: true }); } catch (e2) { /* the first problem is the one to report */ } }
+    throw e;
+  }
   return id;
 }
 const pointerOf = (parent, node) => { const p = node.kind === 'folder' ? node.dir : node.id; return (parent.dir ? path.posix.relative(parent.dir, p) : p) + (node.kind === 'folder' ? '/' : ''); };
@@ -1203,20 +1250,31 @@ async function testTree(ws, o = {}) {
 }
 
 /* ───────────────────────── commands ───────────────────────── */
-function parse(argv) {
-  const flags = new Set(['run', 'force', 'ignore-whitespace', 'allow-test-removal', 'no-open', 'keep', 'remove-unlisted', 'theirs', 'help']), values = new Set(['tree', 'collection', 'environment', 'folder', 'port']), o = { _: [] };
+const ONLY = { method: ['new'], url: ['new'], parents: ['new'] };          // an option that belongs to some commands only -> those commands
+const MULTI = new Set();                         // value options that may be given several times; they are collected into a list
+function parse(argv, sub) {
+  const flags = new Set(['run', 'force', 'ignore-whitespace', 'allow-test-removal', 'no-open', 'keep', 'remove-unlisted', 'theirs', 'help', 'parents']), values = new Set(['tree', 'collection', 'environment', 'folder', 'port', 'method', 'url']), o = { _: [], sub }, given = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] === '-h' ? '--help' : argv[i];
     if (/^-[A-Za-z]/.test(a)) fail(`unknown option ${a}. The options are listed by: ${pmx.SELF} tree --help`);
     if (!a.startsWith('--')) { o._.push(a); continue; }
     const k = a.slice(2);
+    if (!flags.has(k) && !values.has(k)) fail(`unknown option ${a}. The options are listed by: ${pmx.SELF} tree --help`);
+    given.push(k);
     if (flags.has(k)) { o[k] = true; continue; }
-    if (!values.has(k)) fail(`unknown option ${a}. The options are listed by: ${pmx.SELF} tree --help`);
     if (argv[i + 1] === undefined || argv[i + 1].startsWith('--')) fail(`${a} needs a value`);
+    if (MULTI.has(k)) { (o[k] = o[k] || []).push(argv[++i]); continue; }
     if (k in o) fail(`${a} was given twice`);
     o[k] = argv[++i];
   }
+  if (!o.help) for (const k of given) if (ONLY[k] && !ONLY[k].includes(sub)) fail(`--${k} is not an option of "tree ${sub}". The options are listed by: ${pmx.SELF} tree --help`);
   return o;
+}
+/* The words after a command that reads them itself: not fewer than min, not more than max. */
+function words(o, min, max, usage) {
+  if (o._.length > max) fail(`too many words after "tree ${o.sub}": "${o._.slice(max).join(' ')}". Put a name with spaces in quotes.`);
+  if (o._.length < min) fail(usage);
+  return o._;
 }
 /* What each command reads. Anything else is refused, so an option never looks as if it had been applied. */
 const PACKING = ['force', 'ignore-whitespace', 'allow-test-removal'];
@@ -1224,7 +1282,7 @@ const OPTIONS = {
   unpack: ['tree', 'collection', 'force'], adopt: ['tree', 'collection'], import: ['tree', 'collection', 'theirs'], verify: ['tree', 'collection'],
   pack: ['tree', 'collection', ...PACKING], build: ['tree', 'collection', ...PACKING], finish: ['tree', 'collection', 'keep', 'remove-unlisted', ...PACKING],
   status: ['tree', 'collection', 'ignore-whitespace', 'allow-test-removal'], test: ['tree', 'collection', 'environment', 'folder', ...PACKING],
-  ui: ['tree', 'collection', 'port', 'no-open', 'environment'], check: ['collection', 'run'],
+  ui: ['tree', 'collection', 'port', 'no-open', 'environment'], check: ['collection', 'run'], new: ['tree', 'folder', 'method', 'url', 'parents'],
 };
 const packOptions = o => ({ ignoreWs: o['ignore-whitespace'], allowTestRemoval: o['allow-test-removal'], force: o.force, environment: o.environment });
 const treeArg = ws => (ws.treeDir === path.join(path.dirname(ws.baseCopy), 'tree') ? '' : ` --tree ${rel(ws.treeDir)}`);
@@ -1339,6 +1397,77 @@ function cmdFinish(o) {
   fs.rmSync(ws.packCopy, { force: true });
   console.log(`removed ${rel(ws.treeDir)}/ - the collection file now holds everything.`);
   console.log(`next: run the tests on it (${pmx.SELF} unpack ${rel(ws.collection)} && ${pmx.SELF} test), then commit ${rel(ws.collection)}.`);
+  return 0;
+}
+
+/* Where a new request or folder goes, from what was typed. Either a path inside the tree folder (the shell can
+ * complete it): { dir, name }. Or "Folder / Sub / Name", with the folders named as the collection names them: { parts }. */
+function newPath(ws, text) {
+  const typed = String(text).replace(/\\/g, '/'), treeRel = rel(ws.treeDir), inside = path.relative(ws.treeDir, path.resolve(typed));
+  const byFile = typed.startsWith(treeRel + '/') ? typed.slice(treeRel.length + 1) : inside && !inside.startsWith('..') && !path.isAbsolute(inside) ? inside.split(path.sep).join('/') : null;
+  if (byFile != null) {
+    const steps = byFile.split('/').filter(part => part && part !== '.'), name = /\/\s*$/.test(typed) ? '' : (steps.pop() || '').trim();
+    if (!name) fail(`a name is missing in "${text}"`);
+    const abs = inTree(ws.treeDir, steps.join('/') || '.'), found = lstatIf(abs);
+    return { dir: steps.join('/'), name, isDir: !!found && found.isDirectory(), shown: steps.length ? `${treeRel}/${steps.join('/')}/` : `${treeRel}/` };
+  }
+  const parts = typed.split(' / ').map(part => part.trim());
+  if (parts.some(part => !part)) fail(`a name is missing in "${text}"`);
+  return { parts };
+}
+function cmdNew(o) {
+  const usage = `say what to add: ${pmx.SELF} tree new "Folder / Name"   or: ${pmx.SELF} tree new --folder "Folder / Sub"`;
+  const given = words(o, 0, 1, usage), kind = o.folder != null ? 'folder' : 'request';
+  if (given.length && o.folder != null) fail('give a request path or --folder, not both');
+  if (!given.length && o.folder == null) fail(usage);
+  if (kind === 'folder' && (o.method != null || o.url != null)) fail('--method and --url are for a request, not for a folder');
+  if (o.method != null && !/^[A-Za-z]+$/.test(o.method)) fail('--method must be one word of letters, like GET or POST');
+  const method = String(o.method || 'GET').toUpperCase(), text = kind === 'folder' ? o.folder : given[0];
+  const ws = openTree(o), d = describe(ws), show = file => rel(path.join(ws.treeDir, file));
+  if (d.problems.length) fail(`the files have problems. Fix them first: ${pmx.SELF} tree status`);
+  const where = newPath(ws, text), all = flat(d.root), label = n => (n.path.length ? `"${n.path.join(' / ')}"` : 'the collection');
+  let parent = d.root, missing = [], name;
+  if (where.parts) {
+    const folders = where.parts.slice(0, -1);
+    name = where.parts[where.parts.length - 1];
+    where.parts.forEach((part, i) => {             // walk the folders by their names, level by level
+      if (missing.length) return;
+      const below = parent.children.filter(c => c.kind === 'folder'), slash = part.indexOf('/'), head = slash < 0 ? '' : part.slice(0, slash).trim();
+      if (head && below.some(c => c.name === head)) {
+        const right = where.parts.slice(0, i).concat(head, part.slice(slash + 1).trim(), where.parts.slice(i + 1)).join(' / ');
+        fail(`"${text}" has a / without spaces around it. For a ${kind} in the folder ${head} write "${right}". A name that really holds this slash can be added from the page.`);
+      }
+      if (i === folders.length) return;
+      const named = below.filter(c => c.name === part);
+      if (named.length > 1) fail(`${named.length} folders are called "${part}" there:\n  ${named.map(c => c.id).join('\n  ')}\nRename one of them, or name the folder by its path in ${rel(ws.treeDir)}/.`);
+      if (named.length) { parent = named[0]; return; }
+      if (parent.children.some(c => c.kind === 'request' && c.name === part)) fail(`"${part}" is a request. A request cannot contain other requests.`);
+      if (!o.parents) fail(`there is no folder "${part}" in ${label(parent)}. ${below.length ? 'The folders there: ' + below.map(c => c.name).join(', ') + '.' : 'There are no folders there.'} To make it too, add --parents`);
+      missing = folders.slice(i);
+    });
+  } else {
+    name = where.name;
+    const hit = where.isDir ? all.find(x => x.node.kind !== 'request' && x.node.dir === where.dir) : null;
+    if (!hit) fail(`${where.shown} is not a folder of the collection`);
+    parent = hit.node;
+  }
+  const twin = missing.length ? null : parent.children.find(c => c.kind === kind && c.name === name);
+  if (twin) fail(`${parent.path.length ? label(parent) : 'The collection'} already has a ${kind} called "${name}" (${show(twin.id)}). Pick another name.`);
+  let at = parent.id, trail = parent.path.slice();
+  for (const part of missing) {
+    at = addNode(ws, at, 'folder', part);
+    console.log(`new folder: ${(trail = trail.concat(part)).join(' / ')}   (it was missing)`);
+  }
+  const id = addNode(ws, at, kind, name, kind === 'request' ? { method, url: o.url || '', scripts: true } : undefined), title = trail.concat(name).join(' / ');
+  if (kind === 'folder') console.log(`new folder: ${title}\n  ${show(id)}\n  listed in ${show(at)}`);
+  else {
+    const stem = id.slice(0, -'.request.js'.length), files = [[id, 'method, address, headers' + (usuallyHasBody(method) ? ', body' : '')], [stem + '.prerequest.js', 'runs before the request (empty)'], [stem + '.test.js', 'runs after the answer (empty)']];
+    const wide = Math.max(...files.map(f => show(f[0]).length)) + 3;
+    console.log(`new request: ${title}   (${method})`);
+    files.forEach(f => console.log('  ' + show(f[0]).padEnd(wide) + f[1]));
+    console.log(`  listed in ${show(at)}`);
+  }
+  console.log(`next: edit the files, then: ${pmx.SELF} tree ${ws.role === 'source' ? 'build' : 'pack'}`);
   return 0;
 }
 
@@ -1557,10 +1686,13 @@ Both:
   tree ui                         edit in a page served from this machine: requests, variables, scripts, diffs, newman
   tree status                     what changed (A: since the last commit; B: since the unpack), and whether the JSON holds it
   tree test                       build or pack, then run newman on the result (options from pmx.config.json)
+  tree new "<Folder / Name>"      add a request with its two empty script files (--folder "<path>" adds a folder)
   tree check <collection.json>    measure the round trip of a collection without touching anything. --run also compares newman results
 
 options: --tree <dir> (where the files are), --collection <file>,
 --environment <file> (a Postman environment for newman), --folder <name> (test: only this folder or request),
+--method <M> and --url <address> (new: the request's method and address), --parents (new: also make folders that are
+missing),
 --port <n> and --no-open (ui), --keep and --remove-unlisted (finish), --theirs (import: take the JSON as it is),
 --force (pack: overwrite a collection that changed; unpack: discard the files), --ignore-whitespace (pack: drop edits
 that only change spacing), --allow-test-removal
@@ -1568,16 +1700,17 @@ The other pmx commands work exactly as before.`;
 
 async function run(argv) {
   try {
-    const [sub, ...rest] = argv, o = parse(rest);
+    const [sub, ...rest] = argv, o = parse(rest, sub);
     if (o.help || sub === '-h') { console.log(HELP); return 0; }
     if (OPTIONS[sub]) {
-      const stranger = Object.keys(o).find(k => k !== '_' && !OPTIONS[sub].includes(k));
+      const stranger = Object.keys(o).find(k => k !== '_' && k !== 'sub' && !OPTIONS[sub].includes(k));
       if (stranger) fail(`tree ${sub} has no option --${stranger}. The options are listed by: ${pmx.SELF} tree --help`);
-      if (o._.length > 1) fail(`tree ${sub} takes one file at most; it got: ${o._.join(' ')}`);
+      if (o._.length > 1 && sub !== 'new') fail(`tree ${sub} takes one file at most; it got: ${o._.join(' ')}`);
     }
     if (['pack', 'build', 'status', 'test', 'finish', 'verify'].includes(sub) && o._[0] && !o.collection) o.collection = o._[0];
     if (sub === 'unpack') return cmdUnpack(o);
     if (sub === 'adopt') return cmdAdopt(o);
+    if (sub === 'new') return cmdNew(o);
     if (sub === 'verify') return cmdVerify(o);
     if (sub === 'import') return cmdImport(o);
     if (sub === 'pack' || sub === 'build') return cmdPack(o);

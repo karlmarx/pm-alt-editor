@@ -1180,7 +1180,183 @@ async function main() {
   assert.ok(!read(path.join(copyB, 'Demo.postman_collection.json')).includes('\r\n') && parse(read(path.join(copyB, 'Demo.postman_collection.json'))).item[0].item[0].name === 'Ping the API');
   ok('a second review: edits survive a collection that is put back after a merge; strays are never overwritten or in the way unnoticed; removed-but-edited requests keep their edits; a script kept as one string, a byte-order mark, device names, a title like a definition and a slash too many are handled; unknown options are refused; clones with other line ends work');
 
-  // 14. what a review of the files as the source found
+  // 14. tree new: a request with its two empty script files, or a folder, from the command line
+  const d14 = scratch(), C14 = path.join(d14, 'Demo.postman_collection.json'), T14 = (...parts) => path.join(d14, 'Demo', ...parts);
+  const dirty14 = () => git(d14, 'status', '--porcelain'), noTrace14 = out => assert.doesNotMatch(out, /\n\s+at /, 'a stack trace was printed: ' + out);
+  makeDemo(d14);
+  fs.writeFileSync(path.join(d14, '.gitignore'), '.pmx/\n');
+  git(d14, 'init', '-q', '.'); git(d14, 'add', '-A'); git(d14, 'commit', '-qm', 'the collection');
+  assert.strictEqual(pmx(d14, 'tree', 'adopt', 'Demo.postman_collection.json').code, 0);
+  git(d14, 'add', '-A'); git(d14, 'commit', '-qm', 'the files');
+  r = pmx(d14, 'tree', 'new', 'Orders / Refund order', '--method', 'post', '--url', '{{baseUrl}}/refund?why=late');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /new request: Orders \/ Refund order {3}\(POST\)\n {2}Demo\/Orders\/Refund_order\.request\.js {6}method, address, headers, body\n {2}Demo\/Orders\/Refund_order\.prerequest\.js {3}runs before the request \(empty\)\n {2}Demo\/Orders\/Refund_order\.test\.js {9}runs after the answer \(empty\)\n {2}listed in Demo\/Orders\/folder\.js\nnext: edit the files, then: node \S+ tree build/);
+  const defOf14 = file => { const text = read(file); return JSON.parse(text.slice(text.indexOf(START) + START.length, text.lastIndexOf(';'))); };
+  let made14 = defOf14(T14('Orders', 'Refund_order.request.js'));
+  assert.ok(read(T14('Orders', 'Refund_order.request.js')).startsWith('// Orders / Refund order\n'));
+  assert.deepStrictEqual(Object.keys(made14), ['name', 'event', 'request', 'response']);
+  assert.deepStrictEqual(made14.event.map(ev => [ev.listen, ev.script.exec]), [['prerequest', { $script: 'Refund_order.prerequest.js' }], ['test', { $script: 'Refund_order.test.js' }]]);
+  assert.deepStrictEqual(made14.request, { method: 'POST', header: [{ key: 'Content-Type', value: 'application/json' }], body: { mode: 'raw', raw: '', options: { raw: { language: 'json' } } }, url: { raw: '{{baseUrl}}/refund?why=late', host: ['{{baseUrl}}'], path: ['refund'], query: [{ key: 'why', value: 'late' }] } });
+  assert.ok(made14.name === 'Refund order' && same(made14.response, []));
+  assert.ok(fs.statSync(T14('Orders', 'Refund_order.prerequest.js')).size === 0 && fs.statSync(T14('Orders', 'Refund_order.test.js')).size === 0, 'a new script file is not empty');
+  assert.deepStrictEqual(defOf14(T14('Orders', 'folder.js')).item.$children, ['Open_orders.request.js', 'Refund_order.request.js']);
+  r = pmx(d14, 'tree', 'verify');
+  assert.strictEqual(r.code, 1, r.out);
+  assert.match(r.out, /is not what the files generate/);
+  assert.strictEqual(pmx(d14, 'tree', 'build').code, 0);
+  assert.strictEqual(pmx(d14, 'tree', 'verify').code, 0);
+  let builtN = parse(read(C14)).item.find(i => i.name === 'Orders').item;
+  assert.ok(builtN.length === 2 && builtN[1].name === 'Refund order' && builtN[1].request.method === 'POST', 'the new request is not the last one in Orders');
+  assert.deepStrictEqual(builtN[1].event.map(ev => ev.script.exec), [[], []]);
+  r = pmx(d14, 'tree', 'status');
+  assert.deepStrictEqual(r.out.split('\n').filter(line => /^ {2}[A-Z?!] /.test(line)).map(line => line.trim().split('   ')[0]).sort(), ['A Orders/Refund_order.prerequest.js', 'A Orders/Refund_order.request.js', 'A Orders/Refund_order.test.js', 'M Orders/folder.js']);
+  r = pmx(d14, 'tree', 'import');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(pmx(d14, 'tree', 'verify').code, 0);
+  assert.ok(fs.statSync(T14('Orders', 'Refund_order.test.js')).size === 0);
+  r = pmx(d14, 'tree', 'new', 'Orders / List refunds');                                            // a method that has no body
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /\(GET\)\n.*List_refunds\.request\.js {6}method, address, headers\n/);
+  made14 = defOf14(T14('Orders', 'List_refunds.request.js'));
+  assert.deepStrictEqual(made14.request, { method: 'GET', header: [], url: { raw: '' } });
+  r = pmx(d14, 'tree', 'new', 'Demo/Orders/By file');                                              // a path inside the folder, as the shell completes it
+  assert.strictEqual(r.code, 0, r.out);
+  r = pmx(d14, 'tree', 'new', 'Demo\\Orders\\Back slash', '--tree', 'Demo');
+  assert.strictEqual(r.code, 0, r.out);
+  r = pmx(d14, 'tree', 'new', path.join(d14, 'Demo', 'Catalogue', 'Staff_picks', 'Whole path'));
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /new request: Catalogue \/ Staff picks \/ Whole path/);
+  assert.deepStrictEqual(defOf14(T14('Orders', 'folder.js')).item.$children.slice(2), ['List_refunds.request.js', 'By_file.request.js', 'Back_slash.request.js']);
+  assert.ok(defOf14(T14('Orders', 'By_file.request.js')).name === 'By file' && fs.existsSync(T14('Catalogue', 'Staff_picks', 'Whole_path.test.js')));
+  fs.mkdirSync(T14('Loose'));
+  let beforeN = dirty14();
+  for (const [args, pattern] of [
+    [['Orders/Slash'], /^pmx: "Orders\/Slash" has a \/ without spaces around it\. For a request in the folder Orders write "Orders \/ Slash"\. A name that really holds this slash can be added from the page\.\n$/],
+    [['Nowhere / X'], /^pmx: there is no folder "Nowhere" in the collection\. The folders there: Smoke, Catalogue, Orders\. To make it too, add --parents\n$/],
+    [['Smoke / Deeper / X'], /there is no folder "Deeper" in "Smoke"\. There are no folders there\. To make it too, add --parents/],
+    [['Smoke / Ping / X', '--parents'], /"Ping" is a request\. A request cannot contain other requests\./],
+    [['Orders / Refund order'], /"Orders" already has a request called "Refund order" \(Demo\/Orders\/Refund_order\.request\.js\)\. Pick another name\./],
+    [['--folder', 'Catalogue / Staff picks'], /"Catalogue" already has a folder called "Staff picks" \(Demo\/Catalogue\/Staff_picks\/folder\.js\)/],
+    [['Demo/Loose/X'], /Demo\/Loose\/ is not a folder of the collection/],
+    [['Demo/../X'], /leads outside the tree/],
+    [['Orders / '], /a name is missing in "Orders \/ "/],
+    [[' / X'], /a name is missing in " \/ X"/],
+    [[], /say what to add: node \S+ tree new "Folder \/ Name" {3}or: node \S+ tree new --folder "Folder \/ Sub"/],
+    [['Orders / A', '--folder', 'B'], /give a request path or --folder, not both/],
+    [['Orders / A', '--method', 'GET x'], /--method must be one word of letters, like GET or POST/],
+    [['--folder', 'B', '--method', 'GET'], /--method and --url are for a request, not for a folder/],
+    [['Orders', 'A'], /too many words after "tree new": "A"\. Put a name with spaces in quotes\./],
+    [['Orders / A', '--from', 'B'], /unknown option --from/],
+  ]) {
+    r = pmx(d14, 'tree', 'new', ...args);
+    assert.strictEqual(r.code, 2, args.join(' ') + ': ' + r.out);
+    assert.match(r.out, pattern, args.join(' '));
+    noTrace14(r.out);
+    assert.strictEqual(dirty14(), beforeN, 'a refused "tree new" changed a file: ' + args.join(' '));
+  }
+  fs.rmdirSync(T14('Loose'));
+  for (const sub of ['status', 'build', 'verify', 'test', 'ui']) {                                 // an option of another command is refused, before anything is done
+    r = pmx(d14, 'tree', sub, '--url', 'x');
+    assert.strictEqual(r.code, 2, sub + ': ' + r.out);
+    assert.match(r.out, new RegExp(`^pmx: --url is not an option of "tree ${sub}"\\. The options are listed by: node \\S+ tree --help\\n$`));
+  }
+  assert.match(pmx(d14, 'tree', 'status', '--parents').out, /--parents is not an option of "tree status"/);
+  r = pmx(d14, 'tree', 'status', '--url', 'x', '--help');
+  assert.ok(r.code === 0 && /tree new "<Folder \/ Name>" {6}add a request with its two empty script files/.test(r.out) && /--method <M>/.test(r.out) && /--parents/.test(r.out), r.out);
+  assert.match(pmx(d14, 'help').out, /tree ui \| status \| test \| check \| new/);
+  r = pmx(d14, 'tree', 'new', 'GET /orders');                                                      // a slash that belongs to the name
+  assert.strictEqual(r.code, 0, r.out);
+  assert.ok(defOf14(T14('GET_orders.request.js')).name === 'GET /orders' && defOf14(T14('collection.js')).item.$children.slice(-1)[0] === 'GET_orders.request.js');
+  r = pmx(d14, 'tree', 'new', '--folder', 'Orders / EU');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /^new folder: Orders \/ EU\n {2}Demo\/Orders\/EU\/folder\.js\n {2}listed in Demo\/Orders\/folder\.js\nnext: /);
+  assert.deepStrictEqual(defOf14(T14('Orders', 'EU', 'folder.js')), { name: 'EU', item: { $children: [] } });
+  assert.strictEqual(defOf14(T14('Orders', 'folder.js')).item.$children.slice(-1)[0], 'EU/');
+  r = pmx(d14, 'tree', 'new', 'Nowhere / Deep / X', '--parents', '--method', 'delete');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /^new folder: Nowhere {3}\(it was missing\)\nnew folder: Nowhere \/ Deep {3}\(it was missing\)\nnew request: Nowhere \/ Deep \/ X {3}\(DELETE\)\n/);
+  assert.ok(defOf14(T14('Nowhere', 'Deep', 'X.request.js')).request.method === 'DELETE' && same(defOf14(T14('Nowhere', 'folder.js')).item.$children, ['Deep/']) && same(defOf14(T14('Nowhere', 'Deep', 'folder.js')).item.$children, ['X.request.js']));
+  r = pmx(d14, 'tree', 'new', 'Nowhere / Deep / Y', '--parents');                                   // --parents makes only what is missing
+  assert.ok(r.code === 0 && !/it was missing/.test(r.out), r.out);
+  assert.strictEqual(pmx(d14, 'tree', 'new', 'con').code, 0);                                       // names that Windows keeps for devices
+  assert.strictEqual(pmx(d14, 'tree', 'new', '--folder', 'con').code, 0);
+  assert.ok(fs.existsSync(T14('con_.request.js')) && fs.existsSync(T14('con_.prerequest.js')) && fs.existsSync(T14('con_.test.js')) && fs.existsSync(T14('con_', 'folder.js')) && !fs.existsSync(T14('con')));
+  fs.writeFileSync(T14('Orders', 'Taken.test.js'), '// somebody put this here\n');                  // the three files share one stem, also when one name is taken
+  r = pmx(d14, 'tree', 'new', 'Orders / taken');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.ok(['request', 'prerequest', 'test'].every(kind => fs.existsSync(T14('Orders', `taken~2.${kind}.js`))) && read(T14('Orders', 'Taken.test.js')) === '// somebody put this here\n');
+  fs.rmSync(T14('Orders', 'Taken.test.js'));
+  editDef(T14('Catalogue', 'folder.js'), d => { d.item.$children.push('Twin/'); });                // two folders of one name: say so, and take the path
+  fs.mkdirSync(T14('Catalogue', 'Twin'));
+  fs.writeFileSync(T14('Catalogue', 'Twin', 'folder.js'), '// twin\nmodule.exports = ' + JSON.stringify({ name: 'Staff picks', item: { $children: [] } }, null, 2) + ';\n');
+  r = pmx(d14, 'tree', 'new', 'Catalogue / Staff picks / X');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /2 folders are called "Staff picks" there:\n {2}Catalogue\/Staff_picks\/folder\.js\n {2}Catalogue\/Twin\/folder\.js\nRename one of them, or name the folder by its path in Demo\/\./);
+  r = pmx(d14, 'tree', 'new', 'Demo/Catalogue/Twin/X');
+  assert.ok(r.code === 0 && fs.existsSync(T14('Catalogue', 'Twin', 'X.request.js')), r.out);
+  r = pmx(d14, 'tree', 'build');
+  assert.strictEqual(r.code, 0, r.out);
+  r = pmx(d14, 'tree', 'verify');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.doesNotMatch(pmx(d14, 'tree', 'status').out, /^ {2}\? /m);
+  builtN = parse(read(C14));
+  assert.deepStrictEqual(builtN.item.map(i => i.name), ['Smoke', 'Catalogue', 'Orders', 'GET /orders', 'Nowhere', 'con', 'con']);
+  assert.deepStrictEqual(builtN.item[2].item.map(i => i.name), ['Open orders', 'Refund order', 'List refunds', 'By file', 'Back slash', 'EU', 'taken']);
+  const brokenN = read(T14('Orders', 'folder.js'));                                                 // files that cannot be read: nothing is added on top
+  fs.writeFileSync(T14('Orders', 'folder.js'), brokenN.replace('"$children"', '"$children'));
+  beforeN = dirty14();
+  for (const args of [['Orders / More'], ['Smoke / More'], ['--folder', 'More']]) {
+    r = pmx(d14, 'tree', 'new', ...args);
+    assert.strictEqual(r.code, 2, r.out);
+    assert.match(r.out, /^pmx: the files have problems\. Fix them first: node \S+ tree status\n$/);
+    assert.strictEqual(dirty14(), beforeN);
+  }
+  fs.writeFileSync(T14('Orders', 'folder.js'), brokenN);
+  editDef(T14('Smoke', 'folder.js'), d => { d.item = []; });                                        // a folder without a list of pointers
+  beforeN = dirty14();
+  r = pmx(d14, 'tree', 'new', 'Smoke / More');
+  assert.strictEqual(r.code, 2, r.out);
+  assert.match(r.out, /Smoke\/folder\.js has no list of children to add to/);
+  assert.strictEqual(dirty14(), beforeN);
+  const wsN = (() => { const was = process.cwd(); process.chdir(d14); try { return tree.openTree({}); } finally { process.chdir(was); } })();   // a write that fails leaves no file that nothing lists
+  editDef(T14('Smoke', 'folder.js'), d => { d.item = { $children: ['Ping.request.js'] }; });
+  const realRename = fs.renameSync;
+  fs.renameSync = (from, to) => { if (String(to).endsWith(path.join('Smoke', 'folder.js'))) throw new Error('the disk is full'); return realRename(from, to); };
+  try {
+    const cwdN = process.cwd(); process.chdir(d14);
+    try {
+      assert.throws(() => tree.addNode(wsN, 'Smoke/folder.js', 'request', 'Lost', { scripts: true }), /the disk is full/);
+      assert.throws(() => tree.addNode(wsN, 'Smoke/folder.js', 'folder', 'Lost'), /the disk is full/);
+    } finally { process.chdir(cwdN); }
+  } finally { fs.renameSync = realRename; }
+  assert.deepStrictEqual(fs.readdirSync(T14('Smoke')).filter(name => !name.endsWith('.pmx-tmp')).sort(), ['Ping.request.js', 'Ping.test.js', 'folder.js']);
+
+  const w14 = scratch(), Cw14 = path.join(w14, 'Demo.postman_collection.json');                        // the same in a temporary working copy
+  makeDemo(w14);
+  assert.strictEqual(pmx(w14, 'tree', 'unpack', 'Demo.postman_collection.json').code, 0);
+  r = pmx(w14, 'tree', 'new', 'Smoke / Version', '--url', '{{baseUrl}}/ping');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /\.pmx\/Demo\/tree\/Smoke\/Version\.request\.js[^]*next: edit the files, then: node \S+ tree pack/);
+  r = pmx(w14, 'tree', 'status');
+  assert.match(r.out, /M Smoke\/folder\.js[^]*A Smoke\/Version\.request\.js[^]*A Smoke\/Version\.prerequest\.js[^]*A Smoke\/Version\.test\.js/);
+  assert.doesNotMatch(r.out, /^ {2}\? /m);
+  const api14 = spawn(process.execPath, [path.join(ROOT, 'demo', 'mock-server.js')], { env: demoEnv, stdio: 'ignore' });
+  await new Promise(resolve => setTimeout(resolve, 400));
+  try {
+    r = pmx(w14, 'tree', 'test', '--folder', 'Version');                                           // the address it was given is one that newman can send
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /RESULT: PASS - 0 assertions, 0 failed/);
+  } finally { api14.kill(); }
+  assert.strictEqual(pmx(w14, 'tree', 'pack').code, 0);
+  const packedN = parse(read(Cw14)).item[0].item;
+  assert.ok(packedN.length === 2 && packedN[1].name === 'Version' && packedN[1].request.method === 'GET' && same(packedN[1].request.url, { raw: '{{baseUrl}}/ping', host: ['{{baseUrl}}'], path: ['ping'] }));
+  assert.deepStrictEqual(packedN[1].event.map(ev => ev.script.exec), [[''], ['']]);
+  r = pmx(w14, 'tree', 'finish');
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /removed \.pmx\/Demo\/tree\//);
+  ok('tree new: a request gets its definition and two empty script files, all listed (by "Folder / Name" or by a path in the folder); a folder; --parents; build, verify, status and import accept them; what is refused changes no file; a failed write leaves no file behind; the same in a working copy');
+
+  // 15. what a review of the files as the source found
   const adoptedRepo = (sub = '') => {                                                            // a repository with the demo adopted and committed
     const d = scratch(), at = path.join(d, sub);
     fs.mkdirSync(at, { recursive: true });
@@ -1392,7 +1568,7 @@ async function main() {
   assert.strictEqual(read(v.C), pristine, 'a collection written anew does not have the line ends of this checkout');
   ok('a review of the files as the source: a committed edit of the JSON is not built over but imported; a JSON that is only behind is built; the guards hold after a commit of the files; pmx\'s own builds are not taken for edits; an import clash stays one after a commit; a deep collection and a folder adopted from a subfolder are found; one collection has one folder; options belong to their commands');
 
-  // 15. fuzz: random collections must come back identical, and the writer must reproduce their bytes
+  // 16. fuzz: random collections must come back identical, and the writer must reproduce their bytes
   let checkedWriter = 0;
   for (let round = 0; round < 250; round++) {
     const random = seeded(1000 + round);
