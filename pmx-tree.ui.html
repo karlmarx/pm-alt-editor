@@ -1,0 +1,969 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pmx tree</title>
+<style nonce="__NONCE__">
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --text: #1b1f24; --muted: #646b75; --line: #e2e5e9; --code: #fbfbfc; --hover: #eef0f3; --sel: #e4e8ff; --accent: #4f52d6;
+  --good: #17753f; --good-bg: #e4f6ea; --info: #1a63d8; --info-bg: #e5efff; --warn: #a85400; --warn-bg: #fff3dd; --bad: #b3261e; --bad-bg: #ffeceb;
+  --del-bg: #ffeceb; --add-bg: #e6f8ec; --chg-del: #ffc9c4; --chg-add: #b9ebc8; --purple: #7a3fc4; --shadow: 0 1px 2px rgba(20, 24, 30, .06);
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace; --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101214; --panel: #181b1f; --text: #e7e9ec; --muted: #98a0aa; --line: #2a2f36; --code: #14171a; --hover: #20242a; --sel: #262a55; --accent: #9ea1ff;
+    --good: #4cc487; --good-bg: #10291c; --info: #74a9ff; --info-bg: #11213d; --warn: #f2a94f; --warn-bg: #33240e; --bad: #ff8a80; --bad-bg: #3a1618;
+    --del-bg: #3a1618; --add-bg: #10291c; --chg-del: #7a2a2a; --chg-add: #1d5a3a; --purple: #c39bff; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); display: flex; flex-direction: column; }
+button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+button:hover:not(:disabled) { background: var(--hover); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { button.primary { color: #101214; } }
+button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+button.small { padding: 2px 8px; font-size: 12.5px; }
+button.danger { color: var(--bad); border-color: var(--bad); }
+button.link { border: 0; background: none; padding: 0; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+button.on { background: var(--sel); border-color: var(--accent); }
+input[type=text], input:not([type]), select, textarea { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0; }
+input.mono, textarea.mono, select.mono { font: 13px/1.5 var(--mono); }
+h2 { font-size: 16px; margin: 0; } h3 { font-size: 13px; margin: 22px 0 8px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 650; }
+code { font: 12.5px var(--mono); background: var(--hover); padding: 1px 5px; border-radius: 4px; }
+
+header { display: flex; align-items: center; gap: 10px; padding: 9px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header .brand { font-weight: 650; letter-spacing: -.01em; }
+header .file { font: 13px var(--mono); max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+header .grow, .grow { flex: 1; }
+header .actions { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+header select { max-width: 200px; padding: 5px 6px; font-size: 13px; }
+.pill { font-size: 12.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 0; background: var(--hover); color: var(--muted); }
+.pill.good { background: var(--good-bg); color: var(--good); } .pill.warn { background: var(--warn-bg); color: var(--warn); } .pill.bad { background: var(--bad-bg); color: var(--bad); } .pill.info { background: var(--info-bg); color: var(--info); }
+
+.wrap { flex: 1; display: grid; grid-template-columns: minmax(250px, 330px) 1fr; min-height: 0; }
+aside { border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.search { margin: 10px 10px 6px; padding: 6px 9px; background: var(--code); }
+.treebar { display: flex; align-items: center; gap: 6px; padding: 0 10px 8px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+.treebar label { display: flex; align-items: center; gap: 4px; }
+.treebar input[type=text] { flex: 1; padding: 3px 7px; font-size: 13px; }
+.list { overflow: auto; flex: 1; padding-bottom: 16px; }
+.row { display: flex; align-items: center; gap: 7px; padding: 4px 10px 4px 10px; cursor: pointer; border-left: 3px solid transparent; min-height: 28px; }
+.row:hover { background: var(--hover); }
+.row.sel { background: var(--sel); border-left-color: var(--accent); }
+.row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.folder .name, .row.collection .name { font-weight: 600; }
+.caret { width: 14px; flex: none; color: var(--muted); font-size: 11px; text-align: center; border: 0; background: none; padding: 0; }
+.method { font: 700 10.5px/1 var(--mono); flex: none; min-width: 34px; color: var(--muted); }
+.m-GET { color: var(--good); } .m-POST { color: var(--warn); } .m-PUT { color: var(--info); } .m-PATCH { color: var(--purple); } .m-DELETE { color: var(--bad); }
+.badge { font: 700 10.5px/1 var(--mono); padding: 3px 5px; border-radius: 4px; flex: none; }
+.badge.M { background: var(--info-bg); color: var(--info); } .badge.A { background: var(--good-bg); color: var(--good); } .badge.D, .badge.bad { background: var(--bad-bg); color: var(--bad); }
+.inside { width: 7px; height: 7px; border-radius: 50%; background: var(--info); flex: none; margin: 0 6px; opacity: .8; }
+.res { font: 600 12px/1 var(--mono); flex: none; } .res.pass { color: var(--good); } .res.fail { color: var(--bad); }
+.group { padding: 12px 12px 4px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.foot { border-top: 1px solid var(--line); padding: 8px 12px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+main { overflow: auto; min-width: 0; padding: 16px 22px 60px; }
+.nodehead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.crumbs { font-size: 13px; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.crumbs b { color: var(--text); font-size: 16px; font-weight: 650; }
+.tabs2 { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 14px; flex-wrap: wrap; }
+.tabs2 button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 7px 12px; color: var(--muted); }
+.tabs2 button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs2 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--info); margin-left: 6px; vertical-align: middle; }
+.tabbody { max-width: 1180px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 12px 14px; margin-bottom: 12px; }
+.card > h3:first-child { margin-top: 2px; }
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.lab { font-size: 12px; color: var(--muted); font-weight: 600; }
+.line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.line > input.grow, .line > .grow { flex: 1; min-width: 200px; }
+.kv { width: 100%; border-collapse: collapse; }
+.kv td { padding: 2px 4px 2px 0; vertical-align: middle; }
+.kv td.chk { width: 26px; } .kv td.del { width: 34px; }
+.kv input[type=text], .kv input:not([type]) { width: 100%; }
+.kv tr.off input:not([type=checkbox]) { opacity: .5; text-decoration: line-through; }
+.kv th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 0 4px 3px 0; }
+.hint { font-size: 12.5px; color: var(--muted); margin: 4px 0 8px; }
+.hint.bad, .msg.bad { color: var(--bad); } .hint.good { color: var(--good); } .hint.warn { color: var(--warn); }
+.banner { border-radius: 8px; padding: 9px 12px; margin-bottom: 12px; font-size: 13px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.banner.bad { background: var(--bad-bg); color: var(--bad); } .banner.warn { background: var(--warn-bg); color: var(--warn); } .banner.info { background: var(--info-bg); color: var(--info); } .banner.good { background: var(--good-bg); color: var(--good); }
+.empty { color: var(--muted); padding: 26px 0; text-align: center; }
+textarea.plain { width: 100%; min-height: 70px; resize: vertical; }
+
+.editor { display: flex; border: 1px solid var(--line); border-radius: 6px; background: var(--code); overflow: hidden; }
+.gutter { margin: 0; padding: 8px 8px 8px 10px; text-align: right; color: var(--muted); font: 13px/1.5 var(--mono); user-select: none; overflow: hidden; min-width: 44px; border-right: 1px solid var(--line); opacity: .75; }
+textarea.code { flex: 1; border: 0; border-radius: 0; background: var(--code); font: 13px/1.5 var(--mono); padding: 8px 10px; resize: vertical; white-space: pre; overflow: auto; tab-size: 4; min-width: 0; }
+textarea.code:focus-visible { outline-offset: -2px; }
+.scripthead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.scripthead .fname { font: 12.5px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+
+table.diff { width: 100%; border-collapse: collapse; table-layout: fixed; font: 12.5px/1.5 var(--mono); background: var(--code); border: 1px solid var(--line); }
+table.diff td { padding: 0 6px; vertical-align: top; }
+table.diff col.num { width: 46px; } table.diff col.sign { width: 18px; }
+table.diff td.num { text-align: right; color: var(--muted); user-select: none; opacity: .8; }
+table.diff td.sign { text-align: center; user-select: none; color: var(--muted); }
+table.diff td.code { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
+table.diff tr.add td.code, table.diff td.code.add { background: var(--add-bg); } table.diff tr.del td.code, table.diff td.code.del { background: var(--del-bg); }
+table.diff td.code.none { background: var(--hover); opacity: .5; }
+table.diff .chg { border-radius: 2px; } table.diff .add .chg, table.diff td.add .chg { background: var(--chg-add); } table.diff .del .chg, table.diff td.del .chg { background: var(--chg-del); }
+table.diff tr.gap td { text-align: center; color: var(--muted); background: var(--hover); font-family: var(--sans); font-size: 12px; padding: 2px; }
+.filehead { display: flex; align-items: center; gap: 8px; margin: 14px 0 6px; flex-wrap: wrap; }
+.filehead .fname { font: 600 12.5px var(--mono); overflow-wrap: anywhere; }
+.steps { margin: 6px 0 0; padding-left: 20px; } .steps li { margin: 3px 0; }
+.result { padding: 7px 0; border-top: 1px solid var(--line); } .result:first-child { border-top: 0; }
+.result .tname { font-weight: 600; } .msg { font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; margin: 2px 0; }
+.hit { display: flex; gap: 10px; padding: 3px 0; align-items: baseline; } .hit .where { font: 12px var(--mono); flex: none; } .hit .txt { font: 12.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+#notes { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; max-width: min(520px, 90vw); z-index: 5; }
+.note { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--info); border-radius: 6px; padding: 9px 30px 9px 12px; box-shadow: 0 4px 14px rgba(0,0,0,.14); position: relative; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.note.bad { border-left-color: var(--bad); } .note.good { border-left-color: var(--good); }
+.note .x { position: absolute; top: 4px; right: 4px; border: 0; background: none; padding: 2px 7px; color: var(--muted); }
+@media (max-width: 820px) { header .actions { flex-wrap: wrap; margin-left: 0; } .wrap { grid-template-columns: 1fr; grid-template-rows: minmax(140px, 38vh) 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } header .file { max-width: 60vw; } main { padding: 12px 12px 60px; } }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">pmx tree</span>
+  <span class="file" id="file"></span>
+  <button class="pill" id="pillChanges" title="Show every change"></button>
+  <button class="pill" id="pillPack" title="Show what Pack writes into the collection JSON"></button>
+  <span class="grow"></span>
+  <span class="actions">
+    <select id="env" aria-label="Environment file for newman" title="Environment file that newman runs with"></select>
+    <button id="btnChanges">All changes</button>
+    <button id="btnPreview">Collection JSON</button>
+    <button id="btnResults">Results</button>
+    <button id="btnPack" title="Build the collection JSON from the files and write it">Pack</button>
+    <button id="btnRun" class="primary" title="Pack, then run newman on the result">Run tests</button>
+  </span>
+</header>
+<div class="wrap">
+  <aside>
+    <input class="search" id="filter" type="text" placeholder="Filter by name - Enter searches every file" aria-label="Filter requests by name; press Enter to search all definitions and scripts">
+    <div class="treebar" id="treebar"></div>
+    <div class="list" id="tree" role="tree" aria-label="Folders and requests"></div>
+    <div class="foot"><div id="foot"></div><div id="saved" role="status"></div></div>
+  </aside>
+  <main><div id="banners"></div><div id="main"></div></main>
+</div>
+<div id="notes"></div>
+<script nonce="__NONCE__">
+'use strict';
+/* The page for `pmx tree ui`. It talks only to the pmx process that served it (127.0.0.1) and loads nothing else.
+ * Everything from the collection is put on the page as text (textContent), never as HTML. */
+const KEY = new URLSearchParams(location.search).get('k');
+const $ = id => document.getElementById(id);
+const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'value') el.value = v;
+    else if (k === 'checked' || k === 'disabled' || k === 'selected') el[k] = true;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  return add(el, kids);
+}
+function add(el, ...kids) { for (const kid of kids.flat(4)) if (kid != null && kid !== false) el.append(kid); return el; }   // strings become text nodes
+const S = { st: null, pending: null, sel: 'collection.js', node: null, nodeError: '', tab: 'main', view: 'node', diffMode: 'unified', open: null, filter: '', onlyChanged: false, adding: null, focus: null, query: '', running: false, token: 0, leave: null, rawDirty: false, bodies: new Map(), acting: false };
+try { if (localStorage.getItem('pmx-tree-diff') === 'split') S.diffMode = 'split'; } catch (e) { /* no storage: fine */ }
+
+/* ---------- talking to pmx ---------- */
+async function api(method, url, body) {
+  const res = await fetch(url, { method, headers: { 'x-pmx-key': KEY, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  let data;
+  try { data = await res.json(); } catch (e) { data = { error: 'pmx gave an answer that is not JSON' }; }
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { stale: !!data.stale });
+  return data;
+}
+const get = (url, q) => api('GET', url + (q ? '?' + new URLSearchParams(q) : ''));
+const post = (url, body) => api('POST', url, body || {});
+function note(text, kind) {
+  const el = h('div', { class: 'note ' + (kind || 'info'), role: kind === 'bad' ? 'alert' : 'status' }, String(text), h('button', { class: 'x', 'aria-label': 'Dismiss', onclick: () => el.remove() }, '×'));
+  $('notes').append(el);
+  if (kind !== 'bad') setTimeout(() => el.remove(), 7000);
+}
+async function guard(fn) { try { return await fn(); } catch (e) { note(e.message.includes('Failed to fetch') ? 'pmx is not answering. Is `pmx tree ui` still running in the terminal?' : e.message, 'bad'); return undefined; } }
+
+/* ---------- saving: edits go to the files a moment after typing stops ---------- */
+const saves = new Map();
+let chain = Promise.resolve(), busy = 0;
+function later(key, fn) {
+  const old = saves.get(key);
+  if (old) clearTimeout(old.timer);
+  saves.set(key, { fn, timer: setTimeout(() => saveNow(key), 450) });
+  showSaved();
+}
+function saveNow(key) {
+  const job = saves.get(key);
+  if (!job) return chain;
+  clearTimeout(job.timer); saves.delete(key); busy++; showSaved();
+  chain = chain.then(job.fn).catch(e => note(e.message, 'bad')).then(() => { busy--; showSaved(); if (!busy && !saves.size) refresh(); });
+  return chain;
+}
+function flush() { for (const key of [...saves.keys()]) saveNow(key); return chain; }
+/* Before moving on: text in the Raw tab that was not applied yet is applied first. If it cannot be (not valid JSON), stay. */
+async function ready() {
+  if (S.leave) {
+    const leave = S.leave, wrote = S.rawDirty;
+    if (!(await leave())) return false;                      // (S.leave stays while the Raw tab is shown: Pack and Run leave the tab where it is)
+    if (wrote) { await refresh(); await loadNode(); }        // what was written is what the other tabs must show
+  }
+  await flush();
+  return true;
+}
+function showSaved() { $('saved').textContent = saves.size || busy ? 'Saving…' : S.rawDirty ? 'Raw: not applied yet.' : 'Every edit is saved to the files.'; }
+
+/* ---------- state ---------- */
+function findIn(n, id, parent) { if (n.id === id) return { node: n, parent: parent || null }; for (const c of n.children) { const r = findIn(c, id, n); if (r) return r; } return null; }
+const isChanged = n => n.status !== 'same' || n.scripts.some(s => s.status !== 'same');
+async function refresh() {
+  const st = await guard(() => get('/api/state'));
+  if (!st) return;
+  S.st = st;
+  if (!S.open) { let count = 0; (function c(n) { count++; n.children.forEach(c); })(st.root); S.open = new Set(); (function o(n, depth) { if (n.kind !== 'request' && (count <= 150 || depth < 1)) S.open.add(n.id); n.children.forEach(x => o(x, depth + 1)); })(st.root, 0); }
+  renderHeader(); renderTree(); renderNodeHead(); renderBanners();
+  get('/api/pending').then(p => { S.pending = p; renderHeader(); }).catch(() => {});
+}
+async function loadNode() {
+  try { S.node = await get('/api/node', { id: S.sel }); S.nodeError = ''; }
+  catch (e) { S.node = null; S.nodeError = e.message; }
+}
+async function select(id, opt) {
+  if (!(await ready())) return;
+  S.sel = id; S.view = 'node'; S.focus = (opt && opt.focus) || null;
+  if (opt && opt.tab) S.tab = opt.tab;
+  await loadNode();
+  if (S.node && S.tab === 'inherited' && S.node.kind === 'collection') S.tab = 'main';
+  renderHeader(); renderTree(); renderMain();
+}
+async function reloadAll() {
+  await flush(); await refresh();
+  if (S.st && !findIn(S.st.root, S.sel)) S.sel = 'collection.js';
+  await loadNode();
+  if (saves.size || busy) { await flush(); await loadNode(); }   // something was typed while the files were read: read once more, so the form is not drawn from an older copy
+  renderTree(); renderMain();
+}
+async function show(view) { if (!(await ready())) return; S.view = view; if (view === 'node') await loadNode(); renderHeader(); renderTree(); renderMain(); }
+
+/* ---------- header ---------- */
+function renderHeader() {
+  const st = S.st;
+  if (!st) return;
+  $('file').textContent = st.collection; $('file').title = st.collection;
+  const c = st.counts, total = c.modified + c.added + c.removed;
+  const pc = $('pillChanges');
+  pc.textContent = total ? `${total} changed` : 'no changes'; pc.className = 'pill' + (total ? ' info' : '');
+  const pp = $('pillPack'), p = S.pending;
+  if (!p) { pp.textContent = '…'; pp.className = 'pill'; }
+  else if (p.errors.length) { pp.textContent = `cannot pack: ${p.errors.length} problem${p.errors.length > 1 ? 's' : ''}`; pp.className = 'pill bad'; }
+  else if (p.held) { pp.textContent = 'the JSON changed: Pack to follow it'; pp.className = 'pill warn'; }
+  else if (p.packed) { pp.textContent = total ? 'packed: the JSON holds every edit' : 'JSON untouched'; pp.className = 'pill' + (total ? ' good' : ''); }
+  else { pp.textContent = `not packed yet: +${p.added} −${p.removed}`; pp.className = 'pill warn'; }
+  pp.title = p && !p.errors.length && !p.packed ? `The edits are in the files, not yet in ${st.collection} (+${p.added} −${p.removed} lines). Click to see them.` : 'Show what Pack writes into the collection JSON';
+  const env = $('env');
+  if (document.activeElement !== env) {
+    env.textContent = '';
+    add(env, h('option', { value: '' }, 'No environment'), st.environments.map(e => h('option', { value: e.file, selected: e.file === st.environment, title: e.file }, 'Environment: ' + e.name)));
+    env.value = st.environment || '';
+  }
+  $('btnChanges').className = S.view === 'changes' ? 'on' : ''; $('btnPreview').className = S.view === 'preview' ? 'on' : ''; $('btnResults').className = S.view === 'run' ? 'on' : '';
+  const run = st.lastRun;
+  $('btnResults').textContent = run ? (run.pass ? `Results: ${run.total} pass` : `Results: ${run.failed} of ${run.total} fail`) : 'Results';
+  $('btnRun').disabled = S.running; $('btnRun').textContent = S.running ? 'Running…' : 'Run tests';
+  $('btnPack').disabled = S.running;
+  $('foot').textContent = `Working copy: ${st.tree}/  →  packs into ${st.collection}`;
+}
+
+/* ---------- the tree on the left ---------- */
+function runIndex() {
+  const m = new Map(), run = S.st && S.st.lastRun;
+  if (!run) return m;
+  const at = id => { if (!m.has(id)) m.set(id, { pass: 0, fail: 0 }); return m.get(id); };
+  for (const a of run.assertions) if (a.id) { if (a.result === 'FAIL') at(a.id).fail++; else if (a.result === 'pass') at(a.id).pass++; }
+  for (const e of run.errors) if (e.id) at(e.id).fail++;
+  return m;
+}
+function renderTreebar() {
+  const bar = $('treebar');
+  bar.textContent = '';
+  if (S.adding) {
+    const input = h('input', { type: 'text', placeholder: `Name of the new ${S.adding}`, 'aria-label': `Name of the new ${S.adding}`, onkeydown: e => { if (e.key === 'Enter') add(); if (e.key === 'Escape') { S.adding = null; renderTreebar(); } } });
+    let adding = false;
+    const add = async () => {
+      const name = input.value.trim();
+      if (!name || adding) return;
+      adding = true;
+      try { await addNow(name); } finally { adding = false; }
+    };
+    const addNow = async name => {
+      const hit = S.st && findIn(S.st.root, S.sel), parent = !hit ? 'collection.js' : hit.node.kind === 'request' ? hit.parent.id : hit.node.id, kind = S.adding;
+      if (!(await ready())) return;
+      const r = await guard(() => post('/api/add', { parent, kind, name }));
+      if (!r) return;
+      S.adding = null; S.open.add(parent); renderTreebar();
+      await refresh(); await select(r.id, { tab: 'main' });
+    };
+    bar.append(input, h('button', { class: 'small primary', onclick: add }, 'Add'), h('button', { class: 'small', onclick: () => { S.adding = null; renderTreebar(); } }, 'Cancel'));
+    input.focus();
+    return;
+  }
+  const only = h('input', { type: 'checkbox', checked: S.onlyChanged, onchange: () => { S.onlyChanged = only.checked; renderTree(); } });
+  bar.append(h('label', {}, only, 'changed only'), h('span', { class: 'grow' }),
+    h('button', { class: 'small', title: 'New request in the selected folder', onclick: () => { S.adding = 'request'; renderTreebar(); } }, '+ Request'),
+    h('button', { class: 'small', title: 'New folder in the selected folder', onclick: () => { S.adding = 'folder'; renderTreebar(); } }, '+ Folder'));
+}
+function renderTree() {
+  const st = S.st, box = $('tree');
+  if (!st) return;
+  const q = S.filter.trim().toLowerCase(), res = runIndex(), forced = !!q || S.onlyChanged;
+  const walk = (n, depth) => {
+    const kids = n.children.map(c => walk(c, depth + 1)).filter(Boolean);
+    const sum = kids.reduce((a, k) => ({ pass: a.pass + k.sum.pass, fail: a.fail + k.sum.fail }), Object.assign({ pass: 0, fail: 0 }, res.get(n.id)));
+    const inside = kids.some(k => k.changed);          // something in this folder changed, though the folder itself did not
+    const match = (!q || n.name.toLowerCase().includes(q)) && (!S.onlyChanged || isChanged(n));
+    if (!match && !kids.length && n.kind !== 'collection') return null;
+    const open = n.kind === 'request' || forced || S.open.has(n.id);
+    const row = h('div', { class: `row ${n.kind}` + (S.view === 'node' && n.id === S.sel ? ' sel' : ''), role: 'treeitem', tabindex: '0', 'aria-selected': String(n.id === S.sel), 'aria-level': String(depth + 1), 'aria-expanded': n.kind === 'request' ? null : String(open), title: n.path.join(' / ') || n.name,
+      onclick: () => select(n.id), onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(n.id); } } },
+      n.kind === 'request' ? h('span', { class: 'caret' }) : h('button', { class: 'caret', 'aria-label': open ? 'Collapse' : 'Expand', onclick: e => { e.stopPropagation(); if (S.open.has(n.id)) S.open.delete(n.id); else S.open.add(n.id); renderTree(); } }, open ? '▾' : '▸'),
+      n.kind === 'request' ? h('span', { class: 'method m-' + (n.method || '').toUpperCase() }, (n.method || '?').toUpperCase().slice(0, 6)) : null,
+      h('span', { class: 'name' }, n.name || '(no name)'),
+      n.problem ? h('span', { class: 'badge bad', title: n.problem }, '!') : null,
+      sum.fail ? h('span', { class: 'res fail', title: `${sum.fail} failing in the last run` }, `✗${sum.fail}`) : sum.pass ? h('span', { class: 'res pass', title: `${sum.pass} passing in the last run` }, `✓${sum.pass}`) : null,
+      isChanged(n) ? h('span', { class: 'badge ' + (n.status === 'added' ? 'A' : 'M'), title: n.status === 'added' ? 'New' : 'Changed' }, n.status === 'added' ? 'A' : 'M') : inside ? h('span', { class: 'inside', title: 'Something inside changed' }) : null);
+    row.style.paddingLeft = (8 + depth * 14) + 'px';
+    return { els: [row].concat(open ? kids.flatMap(k => k.els) : []), sum, changed: inside || isChanged(n) };
+  };
+  box.textContent = '';
+  box.append(...walk(st.root, 0).els);
+  if (st.removed.length) {
+    box.append(h('div', { class: 'group' }, `Removed (${st.removed.length})`));
+    for (const r of st.removed) box.append(h('div', { class: 'row' }, h('span', { class: 'caret' }), h('span', { class: 'name', title: r.id }, r.name), h('span', { class: 'badge D' }, 'D'),
+      h('button', { class: 'small', onclick: async e => { e.stopPropagation(); if (!(await ready())) return; if (await guard(() => post('/api/revert', { id: r.id }))) { await refresh(); if (findIn(S.st.root, r.id)) await select(r.id); else note('Put back. Its folder was removed too, so put the folder back to see it.'); } } }, 'Put back')));
+  }
+}
+
+/* ---------- small building blocks ---------- */
+const field = (label, control, hint) => h('label', { class: 'field' }, h('span', { class: 'lab' }, label), control, hint ? h('span', { class: 'hint' }, hint) : null);
+function textInput(value, oninput, props) { const el = h('input', Object.assign({ type: 'text', value: value == null ? '' : String(value), spellcheck: 'false' }, props || {})); el.addEventListener('input', () => oninput(el.value)); return el; }
+function dropdown(options, value, onchange, props) {
+  const el = h('select', props || {}, options.map(o => { const [v, label] = Array.isArray(o) ? o : [o, o]; return h('option', { value: v, selected: v === value }, label); }));
+  el.value = value;
+  el.addEventListener('change', () => onchange(el.value));
+  return el;
+}
+/* Add a key to an object at the place Postman would put it, without moving the keys that are already there. */
+function setKey(obj, key, value, order) {
+  if (key in obj) { obj[key] = value; return; }
+  const rank = k => { const i = order.indexOf(k); return i < 0 ? order.length : i; };
+  const entries = Object.entries(obj), at = entries.findIndex(([k]) => rank(k) > rank(key));
+  entries.splice(at < 0 ? entries.length : at, 0, [key, value]);
+  for (const k of Object.keys(obj)) delete obj[k];
+  for (const [k, v] of entries) obj[k] = v;
+}
+const REQUEST_KEYS = ['auth', 'method', 'header', 'body', 'url', 'description'], URL_KEYS = ['raw', 'protocol', 'host', 'port', 'path', 'query', 'hash', 'variable'];
+const NODE_KEYS = ['name', 'description', 'item', 'event', 'auth', 'variable', 'protocolProfileBehavior', 'request', 'response'], TOP_KEYS = ['info', 'item', 'event', 'auth', 'variable'];
+
+/* A table of key/value rows with an on/off box, as used for headers, query parameters, form fields and variables. */
+function kv(opt) {
+  const box = h('div');
+  const draw = () => {
+    const list = opt.list() || [];
+    box.textContent = '';
+    const table = h('table', { class: 'kv' });
+    if (list.length) table.append(h('tr', {}, h('th', {}), h('th', {}, opt.keyLabel || 'Key'), h('th', {}, opt.valueLabel || 'Value'), h('th', {})));
+    list.forEach((row, i) => {
+      if (!isObj(row)) { table.append(h('tr', {}, h('td', { colspan: '4', class: 'hint' }, 'This row is not in the usual form. Edit it in the Raw tab.'))); return; }
+      const on = h('input', { type: 'checkbox', checked: !row.disabled, 'aria-label': 'Enabled', onchange: () => { if (on.checked) delete row.disabled; else row.disabled = true; tr.className = on.checked ? '' : 'off'; opt.changed(); } });
+      const tr = h('tr', { class: row.disabled ? 'off' : '' },
+        h('td', { class: 'chk' }, on),
+        h('td', {}, textInput(row.key, v => { row.key = v; opt.changed(); }, { class: 'mono', 'aria-label': opt.keyLabel || 'Key' })),
+        h('td', {}, row.type === 'file' ? h('span', { class: 'hint' }, 'a file: ' + JSON.stringify(row.src == null ? '' : row.src) + '   (change it in the Raw tab)')
+          : textInput(row.value == null ? '' : typeof row.value === 'string' ? row.value : JSON.stringify(row.value), v => { row.value = v; opt.changed(); }, { class: 'mono', 'aria-label': opt.valueLabel || 'Value' })),
+        h('td', { class: 'del' }, h('button', { class: 'small', title: 'Remove this row', 'aria-label': 'Remove this row', onclick: () => { list.splice(i, 1); if (!list.length && opt.empty) opt.empty(); opt.changed(); draw(); } }, '×')));
+      table.append(tr);
+    });
+    box.append(table, h('button', { class: 'small', onclick: () => {
+      const target = opt.list() || opt.create(), row = { key: '', value: '' };
+      if (opt.type) row.type = opt.type; else if (opt.typeIfTyped && target.some(x => isObj(x) && typeof x.type === 'string')) row.type = opt.typeIfTyped;
+      target.push(row); opt.changed(); draw();
+      const inputs = box.querySelectorAll('tr:last-child input.mono'); if (inputs[0]) inputs[0].focus();
+    } }, '+ Add ' + (opt.what || 'row')));
+  };
+  draw();
+  box.redraw = draw;
+  return box;
+}
+
+/* A text box for code with line numbers. Tab indents; Enter keeps the indentation. */
+function codeEditor(text, oninput, opt) {
+  opt = opt || {};
+  const gutter = h('pre', { class: 'gutter', 'aria-hidden': 'true' });
+  const ta = h('textarea', { class: 'code', spellcheck: 'false', wrap: 'off', autocapitalize: 'off', autocomplete: 'off', 'aria-label': opt.label || 'Code' });
+  ta.value = text;
+  const fit = () => { const n = ta.value.split('\n').length; gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); if (!ta.dataset.sized) ta.rows = Math.max(opt.min || 3, Math.min(n + 1, opt.max || 30)); };
+  const insert = s => { if (!document.execCommand || !document.execCommand('insertText', false, s)) { ta.setRangeText(s, ta.selectionStart, ta.selectionEnd, 'end'); ta.dispatchEvent(new Event('input')); } };
+  ta.addEventListener('input', () => { fit(); oninput(ta.value); });
+  ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); insert('    '); }
+    else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey) { const before = ta.value.slice(0, ta.selectionStart), lineStart = before.lastIndexOf('\n') + 1, indent = /^[ \t]*/.exec(before.slice(lineStart))[0]; if (indent) { e.preventDefault(); insert('\n' + indent); } }
+  });
+  fit();
+  const el = h('div', { class: 'editor' }, gutter, ta);
+  el.ta = ta;
+  el.set = value => { ta.value = value; fit(); };
+  el.goTo = line => {
+    const lines = ta.value.split('\n'), n = Math.max(1, Math.min(line, lines.length));
+    const start = lines.slice(0, n - 1).reduce((a, l) => a + l.length + 1, 0);
+    ta.focus(); ta.setSelectionRange(start, start + lines[n - 1].length);
+    ta.scrollTop = Math.max(0, (n - 4) * 19.5); gutter.scrollTop = ta.scrollTop;
+    el.scrollIntoView({ block: 'nearest' });
+  };
+  return el;
+}
+
+/* ---------- diffs ---------- */
+function inline(a, b) {                            // what the two lines share at the start and at the end
+  const max = Math.min(a.length, b.length);
+  let p = 0, s = 0;
+  while (p < max && a[p] === b[p]) p++;
+  while (s < max - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  if ((p + s) * 3 < Math.max(a.length, b.length)) return null;      // too little in common to be worth marking
+  return { pre: a.slice(0, p), a: a.slice(p, a.length - s), b: b.slice(p, b.length - s), post: s ? a.slice(a.length - s) : '' };
+}
+function codeCell(cls, text, mark, side) {
+  const td = h('td', { class: 'code ' + cls });
+  if (mark && (mark.a || mark.b)) td.append(mark.pre, h('span', { class: 'chg' }, side === 'a' ? mark.a : mark.b), mark.post); else td.textContent = text;
+  return td;
+}
+function diffTable(lines, mode) {
+  if (!lines.some(l => l.t === '+' || l.t === '-')) return h('div', { class: 'hint' }, 'No difference.');
+  const col = cls => h('col', { class: cls });
+  const table = h('table', { class: 'diff ' + (mode === 'split' ? 'split' : 'unified') }, h('colgroup', {}, mode === 'split' ? [col('num'), col(''), col('num'), col('')] : [col('num'), col('num'), col('sign'), col('')]));
+  let rows = 0;
+  const cap = 3000, gap = n => table.append(h('tr', { class: 'gap' }, h('td', { colspan: '4' }, `${n} unchanged line${n === 1 ? '' : 's'}`)));
+  for (let i = 0; i < lines.length && rows < cap;) {
+    const l = lines[i];
+    if (l.t === 'gap') { gap(l.n); i++; continue; }
+    if (l.t === '=') {
+      table.append(mode === 'split' ? h('tr', {}, h('td', { class: 'num' }, l.a), codeCell('', l.s), h('td', { class: 'num' }, l.b), codeCell('', l.s)) : h('tr', {}, h('td', { class: 'num' }, l.a), h('td', { class: 'num' }, l.b), h('td', { class: 'sign' }), codeCell('', l.s)));
+      i++; rows++; continue;
+    }
+    const dels = [], adds = [];
+    while (i < lines.length && lines[i].t === '-') dels.push(lines[i++]);
+    while (i < lines.length && lines[i].t === '+') adds.push(lines[i++]);
+    const marks = dels.map((d, k) => (adds[k] ? inline(d.s, adds[k].s) : null));
+    if (mode === 'split') {
+      for (let k = 0; k < Math.max(dels.length, adds.length); k++, rows++) {
+        const d = dels[k], a = adds[k];
+        table.append(h('tr', {}, h('td', { class: 'num' }, d ? d.a : ''), d ? codeCell('del', d.s, marks[k], 'a') : h('td', { class: 'code none' }), h('td', { class: 'num' }, a ? a.b : ''), a ? codeCell('add', a.s, marks[k], 'b') : h('td', { class: 'code none' })));
+      }
+    } else {
+      dels.forEach((d, k) => { table.append(h('tr', { class: 'del' }, h('td', { class: 'num' }, d.a), h('td', { class: 'num' }), h('td', { class: 'sign' }, '−'), codeCell('', d.s, marks[k], 'a'))); rows++; });
+      adds.forEach((a, k) => { table.append(h('tr', { class: 'add' }, h('td', { class: 'num' }), h('td', { class: 'num' }, a.b), h('td', { class: 'sign' }, '+'), codeCell('', a.s, marks[k], 'b'))); rows++; });
+    }
+  }
+  if (rows >= cap) table.append(h('tr', { class: 'gap' }, h('td', { colspan: '4' }, `Only the first ${cap} lines are shown.`)));
+  return table;
+}
+function diffToggle(redraw) {
+  const set = mode => { S.diffMode = mode; try { localStorage.setItem('pmx-tree-diff', mode); } catch (e) { /* fine */ } redraw(); };
+  return h('span', { class: 'line', role: 'group', 'aria-label': 'Diff layout' },
+    h('button', { class: 'small' + (S.diffMode === 'unified' ? ' on' : ''), 'aria-pressed': String(S.diffMode === 'unified'), onclick: () => set('unified') }, 'Unified'),
+    h('button', { class: 'small' + (S.diffMode === 'split' ? ' on' : ''), 'aria-pressed': String(S.diffMode === 'split'), onclick: () => set('split') }, 'Side by side'));
+}
+function fileDiff(f, extra) {
+  const plus = f.lines.filter(l => l.t === '+').length, minus = f.lines.filter(l => l.t === '-').length;
+  return h('div', {}, h('div', { class: 'filehead' }, h('span', { class: 'fname' }, f.file), h('span', { class: 'hint' }, `${f.what}   +${plus} −${minus}`), h('span', { class: 'grow' }), extra || null), diffTable(f.lines, S.diffMode));
+}
+
+/* ---------- the editor for one request, folder or the collection ---------- */
+/* What is wrong with the files, above whatever is shown. Drawn on its own, so that it can change without the form being drawn again. */
+function renderBanners() {
+  const box = $('banners'), st = S.st;
+  if (!st) return;
+  const key = JSON.stringify([st.problems, st.unlisted]);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.textContent = '';
+  if (st.problems.length) box.append(h('div', { class: 'banner bad', role: 'alert' }, `${st.problems.length} problem${st.problems.length > 1 ? 's' : ''} in the files:\n` + st.problems.slice(0, 8).join('\n')));
+  const n = st.unlisted.length;
+  if (n) box.append(h('div', { class: 'banner warn' }, `${n} file${n > 1 ? 's' : ''} in ${st.tree}/ ${n > 1 ? 'are' : 'is'} not part of the collection, because no definition lists ${n > 1 ? 'them' : 'it'}:\n` + st.unlisted.slice(0, 8).join('\n') + (n > 8 ? '\n…' : '')
+    + '\nA script belongs in the "event" of its request (Raw tab), a request in the "$children" of its folder.'));
+}
+function renderMain() {
+  const main = $('main');
+  S.token++;
+  main.textContent = '';
+  if (S.view !== 'node') { S.leave = null; S.rawDirty = false; }
+  renderBanners();
+  if (S.view === 'changes') return viewChanges(main);
+  if (S.view === 'preview') return viewPreview(main);
+  if (S.view === 'run') return viewRun(main);
+  if (S.view === 'search') return viewSearch(main);
+  if (!S.node) { main.append(h('div', { class: 'empty' }, S.nodeError || 'Loading…')); return; }
+  main.append(h('div', { id: 'nodehead', class: 'nodehead' }), h('div', { id: 'tabs', class: 'tabs2', role: 'tablist' }), h('div', { id: 'tabbody', class: 'tabbody', role: 'tabpanel' }));
+  renderNodeHead(); renderTab();
+}
+function renderNodeHead() {
+  const head = $('nodehead'), tabs = $('tabs'), n = S.node;
+  if (!head || !tabs || !n || !S.st) return;
+  const hit = findIn(S.st.root, n.id), live = hit ? hit.node : { name: n.name, path: n.path, status: n.status, scripts: [] }, changed = isChanged(live);
+  const act = async (url, body, then) => {
+    if (S.acting) return;
+    S.acting = true;
+    try { if (!(await ready())) return; const r = await guard(() => post(url, body)); if (r === undefined) return; if (then) await then(r); else await reloadAll(); } finally { S.acting = false; }
+  };
+  const remove = h('button', { class: 'small danger', onclick: async () => {
+    if (remove.dataset.sure !== '1') { remove.dataset.sure = '1'; remove.dataset.at = String(Date.now()); remove.textContent = 'Really remove?'; setTimeout(() => { remove.dataset.sure = ''; remove.textContent = 'Remove'; }, 4000); return; }
+    if (Date.now() - Number(remove.dataset.at) < 600) return;       // the second half of a double click is not an answer
+    const parent = hit && hit.parent ? hit.parent.id : 'collection.js';
+    await act('/api/remove', { id: n.id }, async () => { S.sel = parent; S.tab = 'main'; await reloadAll(); });
+  } }, 'Remove');
+  head.textContent = '';
+  add(head, h('div', { class: 'crumbs' }, live.path.length > 1 ? live.path.slice(0, -1).join(' / ') + ' / ' : '', h('b', {}, live.name || '(no name)'), '  ',
+    h('span', { class: 'hint' }, n.kind === 'collection' ? 'the collection itself' : n.kind), changed ? h('span', { class: 'badge ' + (live.status === 'added' ? 'A' : 'M') }, live.status === 'added' ? 'new' : 'changed') : null),
+    h('span', { class: 'grow' }),
+    n.kind !== 'collection' ? h('button', { class: 'small', disabled: S.running, title: 'Pack, then run newman on this ' + n.kind + ' only', onclick: () => runTests(n.id) }, 'Run this') : null,
+    n.kind === 'request' ? h('button', { class: 'small', onclick: () => act('/api/duplicate', { id: n.id }, async r => { await refresh(); await select(r.id, { tab: 'main' }); }) }, 'Duplicate') : null,
+    n.kind !== 'collection' ? h('button', { class: 'small', title: 'Move up', 'aria-label': 'Move up', onclick: () => act('/api/move', { id: n.id, by: -1 }) }, '↑') : null,
+    n.kind !== 'collection' ? h('button', { class: 'small', title: 'Move down', 'aria-label': 'Move down', onclick: () => act('/api/move', { id: n.id, by: 1 }) }, '↓') : null,
+    changed && n.originalDef ? h('button', { class: 'small', title: n.kind === 'request' ? 'Put this request and its scripts back to what they were when the collection was unpacked' : 'Put the own fields and scripts of this ' + (n.kind === 'folder' ? 'folder' : 'collection') + ' back. What is in it stays as it is now', onclick: async () => { if (!(await ready())) return; for (const id of [n.id, ...n.scripts.filter(s => s.original != null).map(s => s.file)]) if ((await guard(() => post('/api/revert', { id }))) === undefined) break; await reloadAll(); } }, 'Revert') : null,
+    n.kind !== 'collection' ? remove : null);
+  const labels = [['main', n.kind === 'request' ? 'Request' : n.kind === 'folder' ? 'Folder' : 'Collection', live.status === 'modified'], ['scripts', `Scripts (${live.scripts.length})`, live.scripts.some(s => s.status !== 'same')]]
+    .concat(n.kind === 'collection' ? [] : [['inherited', 'Inherited', false]], [['changes', 'Changes', changed], ['raw', 'Raw', false]]);
+  tabs.textContent = '';
+  for (const [id, label, dot] of labels) tabs.append(h('button', { role: 'tab', 'aria-selected': String(S.tab === id), onclick: async () => { if (!(await ready())) return; S.tab = id; S.focus = null; renderNodeHead(); renderTab(); } }, label, dot ? h('span', { class: 'dot', title: 'changed' }) : null));
+}
+function renderTab() {
+  const body = $('tabbody'), n = S.node;
+  if (!body || !n) return;
+  body.textContent = '';
+  S.leave = null; S.rawDirty = false; showSaved();
+  if (S.tab === 'scripts') tabScripts(body);
+  else if (S.tab === 'inherited') tabInherited(body);
+  else if (S.tab === 'changes') tabChanges(body);
+  else if (S.tab === 'raw') tabRaw(body);
+  else if (n.kind === 'request') tabRequest(body);
+  else tabGroup(body);
+}
+const saveDef = () => { const n = S.node; later('def', () => saved(n, async () => { n.rev = (await post('/api/def', { id: n.id, def: n.def, rev: n.rev })).rev; })); };
+/* Run one save. If pmx refuses it because the file changed underneath, show the file as it is now. */
+async function saved(n, write) {
+  try { await write(); } catch (e) {
+    if (!e.stale) throw e;
+    note(e.message, 'bad');
+    if (S.node === n) { await loadNode(); if (S.view === 'node') renderMain(); }
+  }
+}
+
+/* URLs: Postman stores the text ("raw") and its parts. Editing either keeps the other in step. */
+function parseUrl(raw) {
+  let rest = raw, hash, query = [], protocol, port;
+  let i = rest.indexOf('#');
+  if (i >= 0) { hash = rest.slice(i + 1); rest = rest.slice(0, i); }
+  i = rest.indexOf('?');
+  if (i >= 0) { query = rest.slice(i + 1).split('&').filter(x => x !== '').map(pair => { const e = pair.indexOf('='); return e < 0 ? { key: pair, value: null } : { key: pair.slice(0, e), value: pair.slice(e + 1) }; }); rest = rest.slice(0, i); }
+  const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(rest);
+  if (m) { protocol = m[1]; rest = rest.slice(m[0].length); }
+  i = rest.indexOf('/');
+  let host = i < 0 ? rest : rest.slice(0, i);
+  const path = i < 0 ? undefined : rest.slice(i + 1).split('/');
+  const pm = /:([0-9]+|\{\{[^{}]+\}\})$/.exec(host);
+  if (pm) { port = pm[1]; host = host.slice(0, pm.index); }
+  const parts = [];
+  let cur = '', depth = 0;
+  for (let k = 0; k < host.length; k++) {                 // split on dots, but not inside {{...}}
+    const two = host.substr(k, 2);
+    if (two === '{{') { depth++; cur += two; k++; } else if (two === '}}') { depth = Math.max(0, depth - 1); cur += two; k++; } else if (host[k] === '.' && !depth) { parts.push(cur); cur = ''; } else cur += host[k];
+  }
+  parts.push(cur);
+  return { protocol, host: host === '' ? undefined : parts, port, path, query, hash };
+}
+const urlText = u => (typeof u === 'string' ? u : isObj(u) && typeof u.raw === 'string' ? u.raw : '');
+const inUrl = s => String(s).replace(/[#&]/g, c => (c === '#' ? '%23' : '%26'));      // written as they are, these two would end the value
+const keyInUrl = s => inUrl(s).replace(/=/g, '%3D');
+const asText = v => (v == null ? null : typeof v === 'string' ? v : JSON.stringify(v));
+function setUrl(req, raw, began) {
+  if (typeof req.url === 'string') { req.url = raw; return; }
+  if (!isObj(req.url)) setKey(req, 'url', {}, REQUEST_KEYS);
+  const u = req.url, p = parseUrl(raw), put = (key, value) => { if (value === undefined) delete u[key]; else setKey(u, key, value, URL_KEYS); };
+  put('raw', raw); put('protocol', p.protocol); put('host', p.host); put('port', p.port); put('path', p.path);
+  // A parameter that is still in the URL keeps everything it had (its description, a number as a number); it is found
+  // again by its name, not by its place. Switched-off parameters are not in the URL and stay where they were.
+  // `began` is the list as it was when the typing began: a name that is half typed, or mistyped for a moment, finds
+  // its parameter again once it is whole.
+  const old = began || (Array.isArray(u.query) ? u.query.filter(isObj) : []), waiting = old.filter(q => !q.disabled), source = [];
+  const next = p.query.map(q => {
+    const at = waiting.findIndex(o => keyInUrl(String(o.key)) === q.key || String(o.key) === q.key);
+    if (at < 0) { source.push(null); return q; }
+    const [was] = waiting.splice(at, 1), kept = Object.assign({}, was), had = asText(was.value);
+    if (!(q.value === had || (had != null && q.value === inUrl(had)))) kept.value = q.value;
+    source.push(was);
+    return kept;
+  });
+  const all = [];
+  let done = 0;
+  for (const o of old) {
+    if (o.disabled) { all.push(Object.assign({}, o)); continue; }
+    const at = source.indexOf(o);
+    while (done <= at) all.push(next[done++]);
+  }
+  while (done < next.length) all.push(next[done++]);
+  put('query', all.length ? all : undefined); put('hash', p.hash);
+}
+function queryToRaw(u) {
+  const raw = typeof u.raw === 'string' ? u.raw : '';
+  const end = Math.min(...['?', '#'].map(mark => (raw.includes(mark) ? raw.indexOf(mark) : raw.length)));
+  const on = (u.query || []).filter(q => isObj(q) && !q.disabled).map(q => (q.value == null ? keyInUrl(q.key) : `${keyInUrl(q.key)}=${inUrl(asText(q.value))}`));
+  u.raw = raw.slice(0, end) + (on.length ? '?' + on.join('&') : '') + (typeof u.hash === 'string' && u.hash !== '' ? '#' + u.hash : '');
+}
+/* Lay JSON out again without reading a single value: a long number stays the number that was written. */
+function tidyJson(text) {
+  JSON.parse(text);                                // not JSON: this throws, and the text is left alone
+  const blank = c => c === ' ' || c === '\n' || c === '\r' || c === '\t';
+  let out = '', depth = 0, i = 0;
+  const line = () => '\n' + '  '.repeat(depth);
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"') { let j = i + 1; while (text[j] !== '"') j += text[j] === '\\' ? 2 : 1; out += text.slice(i, j + 1); i = j + 1; }
+    else if (c === '{' || c === '[') { let j = i + 1; while (blank(text[j])) j++; if (text[j] === (c === '{' ? '}' : ']')) { out += c + text[j]; i = j + 1; } else { depth++; out += c + line(); i++; } }
+    else if (c === '}' || c === ']') { depth--; out += line() + c; i++; }
+    else if (c === ',') { out += ',' + line(); i++; }
+    else if (c === ':') { out += ': '; i++; }
+    else if (blank(c)) i++;
+    else { let j = i; while (j < text.length && !blank(text[j]) && !',]}:'.includes(text[j])) j++; out += text.slice(i, j); i = j; }
+  }
+  return out;
+}
+
+function authEditor(holder, order, inheritLabel) {
+  const box = h('div');
+  const read = (a, key) => { const part = a[a.type]; if (Array.isArray(part)) { const r = part.find(x => isObj(x) && x.key === key); return r && r.value != null ? String(r.value) : ''; } return isObj(part) && part[key] != null ? String(part[key]) : ''; };
+  const write = (a, key, value) => { let part = a[a.type]; if (!Array.isArray(part) && !isObj(part)) part = a[a.type] = []; if (Array.isArray(part)) { const r = part.find(x => isObj(x) && x.key === key); if (r) r.value = value; else part.push({ key, value, type: 'string' }); } else part[key] = value; };
+  const draw = () => {
+    const a = isObj(holder.auth) ? holder.auth : null, type = a ? String(a.type || '') : '';
+    const types = [['', inheritLabel], ['noauth', 'No auth'], ['bearer', 'Bearer token'], ['basic', 'Basic (user and password)'], ['apikey', 'API key']];
+    if (!types.some(t => t[0] === type)) types.push([type, type + ' (edit in Raw)']);
+    box.textContent = '';
+    const line = h('div', { class: 'line' }, dropdown(types, type, v => { if (!v) delete holder.auth; else { if (!isObj(holder.auth)) setKey(holder, 'auth', {}, order); setKey(holder.auth, 'type', v, ['type']); } saveDef(); draw(); }, { 'aria-label': 'Kind of auth' }));
+    const one = (label, key) => field(label, textInput(read(a, key), v => { write(a, key, v); saveDef(); }, { class: 'mono' }));
+    box.append(line);
+    if (type === 'bearer') box.append(one('Token (usually a {{variable}})', 'token'));
+    if (type === 'basic') box.append(one('User', 'username'), one('Password (usually a {{variable}})', 'password'));
+    if (type === 'apikey') box.append(one('Name', 'key'), one('Value (usually a {{variable}})', 'value'), field('Sent in', dropdown([['header', 'a header'], ['query', 'the query string']], read(a, 'in') || 'header', v => { write(a, 'in', v); saveDef(); })));
+  };
+  draw();
+  return box;
+}
+function descriptionBox(holder, order) {
+  const had = 'description' in holder, d = holder.description;
+  const ta = h('textarea', { class: 'plain', 'aria-label': 'Description' });
+  ta.value = typeof d === 'string' ? d : isObj(d) && typeof d.content === 'string' ? d.content : '';
+  ta.addEventListener('input', () => { if (isObj(holder.description)) holder.description.content = ta.value; else if (!had && ta.value === '') delete holder.description; else setKey(holder, 'description', ta.value, order); saveDef(); });
+  return ta;
+}
+
+function tabRequest(body) {
+  const n = S.node, def = n.def, req = def.request;
+  body.append(h('div', { class: 'card' }, field('Name', textInput(def.name, v => { def.name = v; saveDef(); }))));
+  if (!isObj(req)) { body.append(h('div', { class: 'banner info' }, 'This request is stored in a short form. Edit it in the Raw tab.')); return; }
+  const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+  if (typeof req.method === 'string' && !methods.includes(req.method)) methods.push(req.method);
+  let query = null;
+  let began = null;                                // the parameters as they were when the URL box got the cursor
+  const urlIn = textInput(urlText(req.url), v => { setUrl(req, v, began); saveDef(); if (query) query.redraw(); }, { class: 'mono grow', 'aria-label': 'URL', placeholder: '{{baseUrl}}/path?key=value' });
+  urlIn.addEventListener('focus', () => { began = isObj(req.url) && Array.isArray(req.url.query) ? req.url.query.filter(isObj).map(q => Object.assign({}, q)) : []; });
+  urlIn.addEventListener('blur', () => { began = null; });
+  const card = h('div', { class: 'card' }, h('div', { class: 'line' }, dropdown(methods, req.method || 'GET', v => { setKey(req, 'method', v, REQUEST_KEYS); saveDef(); }, { class: 'mono', 'aria-label': 'Method' }), urlIn));
+  if (typeof req.url !== 'string') {
+    query = kv({ what: 'query parameter', list: () => (isObj(req.url) && Array.isArray(req.url.query) ? req.url.query : null),
+      create: () => { if (!isObj(req.url)) setKey(req, 'url', { raw: urlIn.value }, REQUEST_KEYS); setKey(req.url, 'query', [], URL_KEYS); return req.url.query; },
+      empty: () => { delete req.url.query; }, changed: () => { queryToRaw(req.url); urlIn.value = req.url.raw; saveDef(); } });
+    card.append(h('h3', {}, 'Query parameters'), query);
+  }
+  body.append(card);
+  const headers = Array.isArray(req.header) || req.header == null
+    ? kv({ what: 'header', type: 'text', list: () => (Array.isArray(req.header) ? req.header : null), create: () => { setKey(req, 'header', [], REQUEST_KEYS); return req.header; }, changed: saveDef })
+    : h('div', { class: 'hint' }, 'The headers are stored as one text. Edit them in the Raw tab.');
+  body.append(h('div', { class: 'card' }, h('h3', {}, 'Headers'), headers));
+  body.append(h('div', { class: 'card' }, h('h3', {}, 'Body'), bodyEditor(req)));
+  body.append(h('div', { class: 'card' }, h('h3', {}, 'Auth'), authEditor(req, REQUEST_KEYS, 'Inherit from the folder or collection')));
+  body.append(h('div', { class: 'card' }, h('h3', {}, 'Description'), descriptionBox(req, REQUEST_KEYS)));
+  const saved = Array.isArray(def.response) ? def.response.length : 0;
+  if (saved) body.append(h('div', { class: 'hint' }, `${saved} saved example response${saved > 1 ? 's' : ''} are kept as they are (see the Raw tab).`));
+}
+function bodyEditor(req) {
+  const box = h('div');
+  const draw = () => {
+    const b = isObj(req.body) ? req.body : null, mode = b ? String(b.mode || 'raw') : 'none';
+    const modes = [['none', 'none'], ['raw', 'raw text'], ['urlencoded', 'form (urlencoded)'], ['formdata', 'form-data'], ['graphql', 'GraphQL']];
+    if (!modes.some(m => m[0] === mode)) modes.push([mode, mode]);
+    box.textContent = '';
+    const line = h('div', { class: 'line' }, dropdown(modes, mode, v => {
+      if (v === 'none') { if (isObj(req.body)) S.bodies.set(S.node.id, req.body); delete req.body; }
+      else {
+        if (!isObj(req.body)) setKey(req, 'body', S.bodies.get(S.node.id) || {}, REQUEST_KEYS);
+        setKey(req.body, 'mode', v, ['mode']);
+        if (v === 'raw' && typeof req.body.raw !== 'string') req.body.raw = '';
+        if ((v === 'urlencoded' || v === 'formdata') && !Array.isArray(req.body[v])) req.body[v] = [];
+        if (v === 'graphql' && !isObj(req.body.graphql)) req.body.graphql = { query: '', variables: '' };
+      }
+      saveDef(); draw();
+    }, { 'aria-label': 'Kind of body' }));
+    box.append(line);
+    if (mode === 'raw') {
+      const lang = isObj(b.options) && isObj(b.options.raw) && typeof b.options.raw.language === 'string' ? b.options.raw.language : '';
+      const ed = codeEditor(typeof b.raw === 'string' ? b.raw : '', v => { b.raw = v; saveDef(); }, { label: 'Body', min: 4, max: 24 });
+      line.append(dropdown([['', 'language: not set'], 'json', 'text', 'javascript', 'xml', 'html'], lang, v => { if (!v) { if (isObj(b.options) && isObj(b.options.raw)) delete b.options.raw.language; } else { if (!isObj(b.options)) b.options = {}; if (!isObj(b.options.raw)) b.options.raw = {}; b.options.raw.language = v; } saveDef(); }, { 'aria-label': 'Language of the body' }),
+        h('button', { class: 'small', title: 'Lay the JSON out again with 2 spaces', onclick: () => { try { const text = tidyJson(ed.ta.value); ed.set(text); b.raw = text; saveDef(); } catch (e) { note('The body is not plain JSON (a {{variable}} outside quotes, perhaps), so it was left as it is.'); } } }, 'Tidy JSON'));
+      box.append(ed);
+    } else if (mode === 'urlencoded' || mode === 'formdata') {
+      box.append(kv({ what: 'field', type: 'text', list: () => (Array.isArray(b[mode]) ? b[mode] : null), create: () => { b[mode] = []; return b[mode]; }, changed: saveDef }));
+    } else if (mode === 'graphql') {
+      const g = isObj(b.graphql) ? b.graphql : (b.graphql = { query: '', variables: '' });
+      box.append(field('Query', codeEditor(String(g.query || ''), v => { g.query = v; saveDef(); }, { label: 'GraphQL query', min: 4, max: 20 })), field('Variables', codeEditor(String(g.variables || ''), v => { g.variables = v; saveDef(); }, { label: 'GraphQL variables', min: 2, max: 12 })));
+    } else if (mode !== 'none') box.append(h('div', { class: 'hint' }, `A "${mode}" body is kept as it is. Edit it in the Raw tab.`));
+  };
+  draw();
+  return box;
+}
+
+/* The collection itself, or a folder: name, variables, auth, description. */
+function tabGroup(body) {
+  const n = S.node, def = n.def, top = n.kind === 'collection', g = top && isObj(def.collection) && !def.item ? def.collection : def;
+  if (top) {
+    if (!isObj(g.info)) setKey(g, 'info', {}, TOP_KEYS);
+    body.append(h('div', { class: 'card' }, field('Name of the collection', textInput(g.info.name, v => { g.info.name = v; saveDef(); }))));
+  } else body.append(h('div', { class: 'card' }, field('Name', textInput(def.name, v => { def.name = v; saveDef(); }))));
+  if (top || Array.isArray(g.variable)) {
+    body.append(h('div', { class: 'card' }, h('h3', {}, top ? 'Collection variables' : 'Folder variables'),
+      h('div', { class: 'hint' }, 'Use one anywhere as {{name}}. An environment file can give the same name another value.'),
+      kv({ what: 'variable', keyLabel: 'Name', typeIfTyped: 'string', list: () => (Array.isArray(g.variable) ? g.variable : null), create: () => { setKey(g, 'variable', [], top ? TOP_KEYS : NODE_KEYS); return g.variable; }, changed: () => { saveDef(); if (usage) later('usage', () => drawUsage()); } })));
+  }
+  body.append(h('div', { class: 'card' }, h('h3', {}, 'Auth for everything in this ' + (top ? 'collection' : 'folder')), authEditor(g, top ? TOP_KEYS : NODE_KEYS, top ? 'Not set here' : 'Inherit from the folder above or the collection')));
+  body.append(h('div', { class: 'card' }, h('h3', {}, 'Description'), descriptionBox(top ? g.info : g, top ? ['_postman_id', 'name', 'description', 'schema'] : NODE_KEYS)));
+  let usage = null;
+  const token = S.token;
+  const drawUsage = async () => {
+    const rows = await guard(() => get('/api/variables'));
+    if (!rows || token !== S.token || !usage.isConnected) return;
+    const env = S.st.environments.find(e => e.file === S.st.environment), missing = rows.filter(r => r.uses && !r.from.length);
+    usage.textContent = '';
+    usage.append(h('h3', {}, 'Variables in use'));
+    usage.append(missing.length
+      ? h('div', { class: 'banner warn' }, `${missing.length} used, but given no value by the collection, ${env ? `the environment "${env.name}"` : 'an environment (none is chosen above)'} or a script: ${missing.map(m => m.key).join(', ')}`)
+      : h('div', { class: 'hint good' }, `Every {{variable}} that is used gets a value from the collection, ${env ? `the environment "${env.name}"` : 'the chosen environment'} or a script.`));
+    const table = h('table', { class: 'kv' }, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Used'), h('th', {}, 'Value comes from'), h('th', {})));
+    for (const r of rows) table.append(h('tr', {}, h('td', {}, h('code', {}, r.key)), h('td', {}, r.uses ? `${r.uses}×` : 'not used'), h('td', { class: r.uses && !r.from.length ? 'msg bad' : '' }, r.from.join(', ') || (r.uses ? 'nowhere' : '')),
+      h('td', {}, r.uses ? h('button', { class: 'link', onclick: () => search(`{{${r.key}}}`) }, 'find') : null)));
+    usage.append(table);
+  };
+  if (top) { usage = h('div', { class: 'card' }, h('div', { class: 'hint' }, 'Looking for variables…')); body.append(usage); drawUsage(); }
+}
+
+const LISTEN = { prerequest: 'Pre-request script', test: 'Tests' };
+function tabScripts(body) {
+  const n = S.node, run = S.st && S.st.lastRun;
+  body.append(h('div', { class: 'hint' }, n.kind === 'collection' ? 'These run for every request in the collection: the pre-request script before each one is sent, the tests after each response.'
+    : n.kind === 'folder' ? 'These run for every request in this folder, after the collection’s own and before the request’s own.' : 'The pre-request script runs before this request is sent, the tests after its response arrives.'));
+  for (const s of n.scripts) {
+    const info = h('div', { class: 'hint' });
+    const tell = r => {
+      info.textContent = ''; info.className = 'hint' + (r.syntax ? ' bad' : '');
+      if (r.syntax) { info.textContent = 'Syntax error: ' + r.syntax + '   (Pack refuses a script that does not parse.)'; return; }
+      const dropped = r.testsBefore != null && r.tests < r.testsBefore;
+      if (dropped) info.className = 'hint warn';
+      info.textContent = `Parses. ${r.tests} pm.test call${r.tests === 1 ? '' : 's'}` + (r.testsBefore != null && r.testsBefore !== r.tests ? ` (${r.testsBefore} when unpacked)` : '') + (dropped ? '. Pack refuses to drop tests.' : '.');
+    };
+    const ed = codeEditor(s.text, text => { s.text = text; later('script:' + s.file, () => saved(n, async () => { const r = await post('/api/script', { file: s.file, text: s.text, rev: s.rev }); s.rev = r.rev; tell(r); })); }, { label: `${LISTEN[s.listen] || s.listen} of ${n.name}`, min: 4, max: 34 });
+    ed.dataset.file = s.file;
+    tell(s);
+    const fails = run ? run.assertions.filter(a => a.result === 'FAIL' && a.file === s.file) : [];
+    body.append(h('div', { class: 'card' },
+      h('div', { class: 'scripthead' }, h('h2', {}, LISTEN[s.listen] || s.listen), h('span', { class: 'fname' }, s.file), h('span', { class: 'grow' }),
+        s.original != null ? h('button', { class: 'small', title: 'Put this script back to what it was when the collection was unpacked', onclick: async () => { if (!(await ready())) return; if (await guard(() => post('/api/revert', { id: s.file }))) await reloadAll(); } }, 'Revert script') : h('span', { class: 'badge A' }, 'new')),
+      ed, info,
+      fails.map(a => h('div', { class: 'msg bad' }, h('button', { class: 'link', onclick: () => ed.goTo(a.line) }, `line ${a.line}`), `  failed in the last run: ${a.name} — ${a.message}`))));
+  }
+  if (!n.scripts.length) body.append(h('div', { class: 'empty' }, 'No scripts here yet.'));
+  const missing = ['prerequest', 'test'].filter(l => !n.scripts.some(s => s.listen === l));
+  if (missing.length) body.append(h('div', { class: 'line' }, missing.map(l => h('button', { onclick: async () => { if (!(await ready())) return; if (await guard(() => post('/api/add-script', { id: n.id, listen: l }))) await reloadAll(); } }, '+ Add ' + (l === 'test' ? 'tests' : 'a pre-request script')))));
+  if (S.focus && S.focus.file) { const ed = [...body.querySelectorAll('.editor')].find(e => e.dataset.file === S.focus.file); if (ed) ed.goTo(S.focus.line || 1); S.focus = null; }
+}
+
+/* What a request gets from above: scripts that run around it, auth, variables. */
+function tabInherited(body) {
+  const n = S.node, chain2 = n.inherited;
+  const step = (owner, listen, own) => {
+    const s = (own ? n.scripts : owner.scripts).find(x => x.listen === listen);
+    const label = own ? `this ${n.kind}` : `${owner.name || '(no name)'} (${owner.kind})`;
+    return h('li', {}, label, ' — ', s ? h('button', { class: 'link', onclick: () => (own ? (S.tab = 'scripts', S.focus = { file: s.file, line: 1 }, renderNodeHead(), renderTab()) : select(owner.id, { tab: 'scripts', focus: { file: s.file, line: 1 } })) }, s.file) : h('span', { class: 'hint' }, 'none'),
+      s && s.status !== 'same' ? h('span', { class: 'badge ' + (s.status === 'added' ? 'A' : 'M') }, s.status === 'added' ? 'new' : 'changed') : null);
+  };
+  body.append(h('div', { class: 'card' }, h('h3', {}, n.kind === 'request' ? 'Runs before this request is sent, in this order' : 'Runs before each request in this folder, in this order'), h('ol', { class: 'steps' }, chain2.map(o => step(o, 'prerequest')), step(null, 'prerequest', true)),
+    h('h3', {}, n.kind === 'request' ? 'Runs after its response arrives, in this order' : 'Runs after each response, in this order'), h('ol', { class: 'steps' }, chain2.map(o => step(o, 'test')), step(null, 'test', true))));
+  const holder = n.kind === 'request' ? n.def.request : n.def, own = isObj(holder) && isObj(holder.auth) ? String(holder.auth.type || '') : '';
+  const from = [...chain2].reverse().find(o => o.auth);
+  body.append(h('div', { class: 'card' }, h('h3', {}, 'Auth'), own ? `Set here: ${own}.` : from ? h('span', {}, `Not set here. Uses ${from.auth} from `, h('button', { class: 'link', onclick: () => select(from.id, { tab: 'main' }) }, `${from.name} (${from.kind})`), '.') : 'Not set here, and nothing above sets one.'));
+  const env = S.st.environments.find(e => e.file === S.st.environment);
+  const vars = h('div', { class: 'card' }, h('h3', {}, 'Variables it can use'));
+  for (const o of chain2) if (o.variables.length) vars.append(h('div', { class: 'line' }, h('button', { class: 'link', onclick: () => select(o.id, { tab: 'main' }) }, `${o.name} (${o.kind})`), o.variables.map(v => h('code', { title: v.disabled ? 'switched off' : '' }, v.disabled ? `(${v.key})` : v.key))));
+  vars.append(env ? h('div', { class: 'line' }, h('span', {}, `Environment "${env.name}"`), env.keys.map(k => h('code', { title: k.enabled ? '' : 'switched off' }, k.enabled ? k.key : `(${k.key})`))) : h('div', { class: 'hint' }, 'No environment file is chosen (top right). Its values are never shown here, only the names.'));
+  body.append(vars);
+}
+
+async function tabChanges(body) {
+  const token = S.token, n = S.node;
+  await flush();
+  const files = await guard(() => get('/api/diff', { id: n.id }));
+  if (!files || token !== S.token || S.tab !== 'changes' || !body.isConnected) return;
+  const changed = files.filter(f => f.changed);
+  body.textContent = '';
+  body.append(h('div', { class: 'line' }, h('span', { class: 'hint' }, 'Against the collection as it was when it was unpacked.'), h('span', { class: 'grow' }), diffToggle(() => renderTab())));
+  if (!changed.length) body.append(h('div', { class: 'empty' }, 'Nothing here was changed.'));
+  for (const f of changed) body.append(fileDiff(f));
+}
+function tabRaw(body) {
+  const n = S.node;
+  const write = async () => {                     // true when the text is in the file
+    try { n.rev = (await post('/api/def', { id: n.id, text: ed.ta.value, rev: n.rev })).rev; } catch (e) {
+      if (e.stale) { const now = await get('/api/node', { id: n.id }).catch(() => null); if (now) n.rev = now.rev; note(e.message.split('. ')[0] + '. Your text is still in the box: press Apply again to write it over the file.', 'bad'); } else note(e.message, 'bad');
+      return false;
+    }
+    S.rawDirty = false; button.disabled = true; showSaved();
+    return true;
+  };
+  const apply = async () => { await flush(); if (await write()) { S.leave = null; note('Applied.', 'good'); await reloadAll(); } };
+  const ed = codeEditor(JSON.stringify(n.def, null, 2), () => { S.rawDirty = true; button.disabled = false; showSaved(); }, { label: 'Definition as JSON', min: 10, max: 40 });
+  const button = h('button', { class: 'primary', disabled: true, onclick: apply }, 'Apply');
+  S.leave = async () => !S.rawDirty || write();
+  ed.ta.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); e.stopPropagation(); apply(); } });
+  body.append(h('div', { class: 'hint' }, 'Everything about this ' + (n.kind === 'collection' ? 'collection' : n.kind) + ' as it is kept in ', h('code', {}, n.id), '. ', h('code', {}, '{"$script": "file"}'), ' stands for a script kept in its own file', n.kind === 'request' ? '.' : h('span', {}, ', ', h('code', {}, '{"$children": [...]}'), ' for the requests and folders inside, in order.')),
+    ed, h('div', { class: 'line' }, button, h('span', { class: 'hint' }, 'Apply (or Ctrl+S) writes this to the file. So does leaving this tab.')));
+  if (S.focus && S.focus.text) { const lines = ed.ta.value.split('\n'), at = lines.findIndex(l => l.toLowerCase().includes(S.focus.text.toLowerCase())); ed.goTo(at < 0 ? 1 : at + 1); S.focus = null; }
+}
+
+/* ---------- views of the whole collection ---------- */
+async function viewChanges(main) {
+  const token = S.token;
+  main.append(h('div', { class: 'nodehead' }, h('h2', {}, 'Every change against the collection as it was unpacked'), h('span', { class: 'grow' }), diffToggle(() => renderMain())));
+  const list = await guard(() => get('/api/changes'));
+  if (!list || token !== S.token) return;
+  if (!list.length) main.append(h('div', { class: 'empty' }, 'Nothing was changed yet.'));
+  for (const c of list) {
+    const letter = c.status === 'added' ? 'A' : c.status === 'removed' ? 'D' : 'M';
+    main.append(h('div', { class: 'card' }, h('div', { class: 'scripthead' }, h('span', { class: 'badge ' + letter }, c.status), h('h2', {}, c.path.join(' / ') || c.name), h('span', { class: 'hint' }, c.kind), h('span', { class: 'grow' }),
+      c.status === 'removed' ? h('button', { class: 'small', onclick: async () => { if (!(await guard(() => post('/api/revert', { id: c.id })))) return; await reloadAll(); if (!findIn(S.st.root, c.id)) note('It is listed in its folder again, but that folder was removed too. Put the folder back to see it.'); } }, 'Put back') : h('button', { class: 'small', onclick: () => select(c.id, { tab: 'main' }) }, 'Open')),
+      c.files.map(f => fileDiff(f))));
+  }
+}
+async function viewPreview(main) {
+  const token = S.token, st = S.st;
+  main.append(h('div', { class: 'nodehead' }, h('h2', {}, `What Pack writes into ${st.collection}`), h('span', { class: 'grow' }), diffToggle(() => renderMain()), h('button', { class: 'primary', disabled: S.running, onclick: pack }, 'Pack')));
+  main.append(h('div', { class: 'card' }, 'The files are a working copy. The collection JSON is what gets kept and merged:',
+    h('ol', { class: 'steps' }, h('li', {}, 'Edit here (or edit the files in ', h('code', {}, st.tree + '/'), ' by hand).'), h('li', {}, h('b', {}, 'Run tests'), ' packs and runs newman. ', h('b', {}, 'Pack'), ' only writes the JSON.'),
+      h('li', {}, 'Before the branch is merged, run ', h('code', {}, 'pmx tree finish'), ' in the terminal: it packs one last time and removes the files, so that only the collection JSON is merged.'))));
+  const p = await guard(() => get('/api/preview'));
+  if (!p || token !== S.token) return;
+  if (p.errors.length) { main.append(h('div', { class: 'banner bad', role: 'alert' }, 'Pack would be refused:\n' + p.errors.join('\n'))); return; }
+  if (p.onto) main.append(h('div', { class: 'banner warn' }, `${st.collection} was changed by something else since it was unpacked (a merge, perhaps). ` + (p.held ? 'It already holds every edit from the files. Pack writes the files again from it.' : 'Pack merges the edits from the files into it and then writes the files again from the result.')));
+  if (!p.added && !p.removed) { main.append(h('div', { class: 'empty' }, 'The collection JSON would not change.')); return; }
+  main.append(h('div', { class: 'hint' }, `+${p.added} −${p.removed} lines against ${p.onto ? 'the file as it is now' : 'the version that was unpacked'}; ${p.how}. Every other line of the file stays byte for byte as it is.`), diffTable(p.lines, S.diffMode));
+}
+function viewRun(main) {
+  const run = S.st && S.st.lastRun;
+  main.append(h('div', { class: 'nodehead' }, h('h2', {}, 'Test results'), h('span', { class: 'grow' }), h('button', { class: 'primary', disabled: S.running, onclick: () => runTests() }, S.running ? 'Running…' : 'Run all tests')));
+  if (S.running) main.append(h('div', { class: 'banner info' }, 'newman is running…'));
+  if (!run) { main.append(h('div', { class: 'empty' }, 'No run yet. "Run tests" packs the files into the collection JSON and runs newman on it.')); return; }
+  main.append(h('div', { class: 'banner ' + (run.pass ? 'good' : 'bad') }, (run.pass ? `PASS — ${run.total} assertions, none failed` : `FAIL — ${run.failed} of ${run.total} assertions failed` + (run.errors.length ? `, ${run.errors.length} error${run.errors.length > 1 ? 's' : ''}` : ''))
+    + `\n${run.only ? `Only "${run.only}" was run. ` : ''}Environment: ${run.environment || 'none'}. Finished ${new Date(run.at).toLocaleTimeString()}.`));
+  const groups = new Map();
+  for (const a of run.assertions) { const key = a.path.join(' / '); if (!groups.has(key)) groups.set(key, { id: a.id, list: [] }); groups.get(key).list.push(a); }
+  const failing = [...groups].filter(([, g]) => g.list.some(a => a.result === 'FAIL')), passing = [...groups].filter(([, g]) => !g.list.some(a => a.result === 'FAIL'));
+  for (const [title, g] of failing) main.append(h('div', { class: 'card' }, h('div', { class: 'scripthead' }, h('span', { class: 'res fail' }, '✗'), h('h2', {}, title), h('span', { class: 'grow' }), g.id ? h('button', { class: 'small', onclick: () => select(g.id, { tab: 'scripts' }) }, 'Open') : null),
+    g.list.filter(a => a.result === 'FAIL').map(a => h('div', { class: 'result' }, h('div', { class: 'tname' }, a.name), h('div', { class: 'msg bad' }, a.message),
+      a.file && a.id ? h('button', { class: 'link', onclick: () => select(a.owner || a.id, { tab: 'scripts', focus: { file: a.file, line: a.line } }) }, `${a.file}:${a.line}`) : null)),
+    g.list.some(a => a.result === 'pass') ? h('div', { class: 'hint' }, `${g.list.filter(a => a.result === 'pass').length} other assertion(s) of this request passed.`) : null));
+  if (run.errors.length) main.append(h('div', { class: 'card' }, h('h3', {}, 'Errors (a script or a request did not run)'), run.errors.map(e => h('div', { class: 'result' }, h('div', { class: 'tname' }, e.path.join(' / ') || '(collection)'), h('div', { class: 'msg bad' }, e.text), e.id ? h('button', { class: 'link', onclick: () => select(e.id, { tab: 'scripts' }) }, 'Open') : null))));
+  if (passing.length) main.append(h('div', { class: 'card' }, h('h3', {}, `Passing (${passing.length} request${passing.length > 1 ? 's' : ''})`), passing.map(([title, g]) => h('div', { class: 'hit' }, h('span', { class: 'res pass' }, `✓${g.list.filter(a => a.result === 'pass').length}`), g.id ? h('button', { class: 'link', onclick: () => select(g.id, { tab: 'scripts' }) }, title) : h('span', {}, title)))));
+}
+async function search(q) { S.query = q; $('filter').value = ''; S.filter = ''; await show('search'); }
+async function viewSearch(main) {
+  const token = S.token, q = S.query;
+  main.append(h('div', { class: 'nodehead' }, h('h2', {}, `Search: ${q}`)));
+  const hits = await guard(() => get('/api/search', { q }));
+  if (!hits || token !== S.token) return;
+  if (!hits.length) { main.append(h('div', { class: 'empty' }, 'Not found in any definition or script.')); return; }
+  main.append(h('div', { class: 'hint' }, `${hits.length}${hits.length >= 300 ? ' or more' : ''} line${hits.length === 1 ? '' : 's'} in definitions and scripts.`));
+  const groups = new Map();
+  for (const x of hits) { if (!groups.has(x.id)) groups.set(x.id, []); groups.get(x.id).push(x); }
+  for (const [id, list] of groups) main.append(h('div', { class: 'card' }, h('div', { class: 'scripthead' }, h('h2', {}, list[0].path.join(' / ') || list[0].name), h('span', { class: 'hint' }, list[0].kind), h('span', { class: 'grow' }), h('button', { class: 'small', onclick: () => select(id) }, 'Open')),
+    list.map(x => h('div', { class: 'hit' }, h('button', { class: 'link where', onclick: () => select(id, x.script ? { tab: 'scripts', focus: { file: x.file, line: x.line } } : { tab: 'raw', focus: { text: q } }) }, x.script ? `${x.file.split('/').pop()}:${x.line}` : 'definition'), h('span', { class: 'txt', title: x.text }, x.text)))));
+}
+
+/* ---------- pack and run ---------- */
+async function pack() {
+  if (!(await ready())) return;
+  const r = await guard(() => post('/api/pack'));
+  if (!r) return;
+  if (r.errors.length) { note('Pack was refused:\n' + r.errors.join('\n'), 'bad'); S.view = 'preview'; }
+  else note(r.held ? `${S.st.collection} had changed and already held every edit. The files were written again from it.` : `Packed into ${S.st.collection}: +${r.added} −${r.removed} lines (${r.how}).` + (r.onto ? '\nThe files were written again from the merged result.' : ''), 'good');
+  if (r.apart) note(`Two requests or folders share a name, and the files can no longer be told apart from the newer collection. ${S.st.collection} is right and holds every edit. Close this page and unpack again with --force before you go on.`, 'bad');
+  if (r.onto) await reloadAll(); else { await flush(); await refresh(); if (S.view !== 'node') renderMain(); }
+  renderHeader();
+}
+async function runTests(id) {
+  if (S.running) return;
+  if (!(await ready())) return;
+  S.running = true; renderHeader(); if (S.view === 'run') renderMain();
+  let r;
+  try { r = await post('/api/test', id ? { id } : {}); } catch (e) { note(e.message, 'bad'); }
+  S.running = false;
+  if (S.rawDirty && !(await ready())) { renderHeader(); return; }      // the Raw text could not be written: stay on it (the results are under "Results")
+  if (r && r.errors.length) { note((r.merged ? '' : 'The collection JSON could not be written from the files, so nothing was run:\n') + r.errors.join('\n'), 'bad'); if (!r.merged) S.view = 'preview'; }
+  else if (r) { S.view = 'run'; if (r.run.merged) note(`${S.st.collection} had changed since it was unpacked. The edits from the files were merged into it, and the files were written again from the result.`); }
+  await reloadAll(); renderHeader();
+}
+
+/* ---------- wiring ---------- */
+$('btnChanges').addEventListener('click', () => show(S.view === 'changes' ? 'node' : 'changes'));
+$('btnPreview').addEventListener('click', () => show(S.view === 'preview' ? 'node' : 'preview'));
+$('btnResults').addEventListener('click', () => show(S.view === 'run' ? 'node' : 'run'));
+$('pillChanges').addEventListener('click', () => show('changes'));
+$('pillPack').addEventListener('click', () => show('preview'));
+$('btnPack').addEventListener('click', pack);
+$('btnRun').addEventListener('click', () => runTests());
+$('env').addEventListener('change', async () => { if (await guard(() => post('/api/environment', { file: $('env').value }))) { await refresh(); if (S.view === 'node' && (S.tab === 'main' || S.tab === 'inherited')) renderMain(); } });
+$('filter').addEventListener('input', () => { S.filter = $('filter').value; renderTree(); });
+$('filter').addEventListener('keydown', e => { if (e.key === 'Enter' && $('filter').value.trim()) search($('filter').value.trim()); if (e.key === 'Escape') { $('filter').value = ''; S.filter = ''; renderTree(); } });
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); flush(); }
+  if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) { e.preventDefault(); $('filter').focus(); }
+});
+window.addEventListener('focus', async () => {            // the files may have been edited by hand meanwhile
+  if (saves.size || busy || S.running || S.rawDirty || !S.st) return;
+  const picture = n => JSON.stringify([n.def, n.scripts.map(x => x.text)]);
+  const id = S.sel, was = S.node, before = was ? picture(was) : null;
+  await refresh();
+  if (S.view !== 'node' || !was) return;
+  const now = await get('/api/node', { id }).catch(() => null);
+  if (!now || S.node !== was || S.sel !== id || saves.size || busy || S.rawDirty || picture(was) !== before) return;   // something was typed or chosen meanwhile: leave it
+  if (picture(now) !== before) { S.node = now; renderMain(); }
+  else { was.rev = now.rev; now.scripts.forEach((x, i) => { if (was.scripts[i] && was.scripts[i].file === x.file) was.scripts[i].rev = x.rev; }); }
+});
+window.addEventListener('pagehide', () => { flush(); });
+window.addEventListener('beforeunload', e => { if (S.rawDirty) { e.preventDefault(); e.returnValue = ''; } });
+(async () => { showSaved(); renderTreebar(); await refresh(); if (S.st) { await loadNode(); renderMain(); } })();
+</script>
+</body>
+</html>

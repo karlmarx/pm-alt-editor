@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 318" width="960" height="318" role="img" aria-labelledby="t d">
+<title id="t">The files on a branch</title><desc id="d">On a branch, the first commit adds the unpacked files exactly as they are in the collection. The next commits edit single files, which is what reviewers read. The last commit, made after tree finish, removes the files and changes the collection JSON. Main receives one changed file.</desc>
+<style>
+.bg{fill:#f6f7f9}.card{fill:#fff;stroke:#dde1e6}
+.t{font:14px system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#1b1f24}
+.h{font-weight:650;font-size:15px}.s{font-size:12.5px;fill:#5d6570}.xs{font-size:11.5px;fill:#5d6570}
+.m{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;font-size:12.5px}
+.mb{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;font-size:13px;font-weight:700}
+.ln{fill:none;stroke:#7d8691;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.ln-f{fill:#7d8691}
+.dot{fill:#fff;stroke:#7d8691;stroke-width:1.6}
+.keep{fill:#e2f5e8;stroke:#1f8a4c}.keep-t{fill:#17753f}.keep-l{stroke:#1f8a4c}.keep-f{fill:#1f8a4c}
+.temp{fill:#fff1d6;stroke:#c98a2b}.temp-t{fill:#9a4d00}.temp-l{stroke:#c98a2b}.temp-f{fill:#c98a2b}
+.act{fill:#e4edff;stroke:#2f6fde}.act-t{fill:#1a56c4}.act-l{stroke:#2f6fde}.act-f{fill:#2f6fde}
+.fold{fill:#fff;fill-opacity:.55}
+.dash{stroke-dasharray:5 4}.ghost{fill:none;stroke:#aab1ba;stroke-dasharray:5 4}.ghost-t{fill:#7d8691}
+.num{fill:#4f52d6}.num-t{fill:#fff;font:700 13px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.dim{opacity:.45}.thick{stroke-width:2.4}
+.c1{fill:#7a5af5}.c2{fill:#1a8fe3}.c3{fill:#d9822b}.c4{fill:#2e9e5b}.c5{fill:#d6457a}
+.ln.k1{stroke:#7a5af5}.ln.k2{stroke:#1a8fe3}.ln.k3{stroke:#d9822b}.ln.k4{stroke:#2e9e5b}.ln.k5{stroke:#d6457a}
+@media (prefers-color-scheme:dark){
+.bg{fill:#14171b}.card{fill:#1b1f24;stroke:#2c323a}
+.t{fill:#e7e9ec}.s,.xs{fill:#9aa2ac}
+.ln{stroke:#8d96a1}.ln-f{fill:#8d96a1}.ghost{stroke:#5d6570}.ghost-t{fill:#8d96a1}.dot{fill:#1b1f24;stroke:#8d96a1}
+.keep{fill:#12301f;stroke:#3fae6f}.keep-t{fill:#63d394}.keep-l{stroke:#3fae6f}.keep-f{fill:#3fae6f}
+.temp{fill:#36270d;stroke:#d59a3c}.temp-t{fill:#f0b65c}.temp-l{stroke:#d59a3c}.temp-f{fill:#d59a3c}
+.act{fill:#13233f;stroke:#5c93f2}.act-t{fill:#8db6ff}.act-l{stroke:#5c93f2}.act-f{fill:#5c93f2}
+.fold{fill:#000;fill-opacity:.25}
+.num{fill:#8a8dff}.num-t{fill:#14171b}
+}</style><defs>
+<marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ln-f"/></marker>
+<marker id="ak" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="keep-f"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="temp-f"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="act-f"/></marker>
+</defs>
+<rect width="960" height="318" rx="14" class="bg"/>
+<text x="22" y="67" class="t mb">main</text>
+<path d="M70 62H934" class="ln thick"/>
+<text x="22" y="137" class="t mb">branch</text>
+<path d="M96 62C142 62 116 132 162 132H794C840 132 846 62 892 62" class="ln thick"/>
+<circle cx="96" cy="62" r="7" class="dot"/>
+<circle cx="892" cy="62" r="10" class="keep"/>
+<text x="906" y="42" class="t xs keep-t" text-anchor="end">main receives 1 changed file: the collection JSON</text>
+<path d="M200 142V162" class="ln"/>
+<circle cx="200" cy="132" r="9" class="temp"/>
+<rect x="112" y="162" width="176" height="106" rx="10" class="card"/>
+<circle cx="132" cy="184" r="11" class="num"/><text x="132" y="188.5" class="num-t" text-anchor="middle">1</text>
+<text x="150" y="189" class="t mb">tree unpack</text>
+<text x="124" y="214" style="font-size:11.5px" class="t m temp-t">+ collection-files/</text>
+<text x="124" y="233" class="t xs">the files, exactly as</text>
+<text x="124" y="252" class="t xs">they are in the collection</text>
+<path d="M388 142V162" class="ln"/>
+<circle cx="388" cy="132" r="9" class="temp"/>
+<rect x="300" y="162" width="176" height="106" rx="10" class="card"/>
+<circle cx="320" cy="184" r="11" class="num"/><text x="320" y="188.5" class="num-t" text-anchor="middle">2</text>
+<text x="338" y="189" class="t mb">edit</text>
+<text x="312" y="214" style="font-size:11.5px" class="t m temp-t">~ Open_orders.test.js</text>
+<text x="312" y="233" class="t xs">one script</text>
+<path d="M576 142V162" class="ln"/>
+<circle cx="576" cy="132" r="9" class="temp"/>
+<rect x="488" y="162" width="176" height="106" rx="10" class="card"/>
+<circle cx="508" cy="184" r="11" class="num"/><text x="508" y="188.5" class="num-t" text-anchor="middle">3</text>
+<text x="526" y="189" class="t mb">edit</text>
+<text x="500" y="214" style="font-size:11.5px" class="t m temp-t">~ Ping.request.js</text>
+<text x="500" y="233" style="font-size:11.5px" class="t m temp-t">+ Version.request.js</text>
+<text x="500" y="252" style="font-size:11.5px" class="t m temp-t">~ folder.js</text>
+<path d="M764 142V162" class="ln"/>
+<circle cx="764" cy="132" r="9" class="keep"/>
+<rect x="676" y="162" width="176" height="106" rx="10" class="card"/>
+<circle cx="696" cy="184" r="11" class="num"/><text x="696" y="188.5" class="num-t" text-anchor="middle">4</text>
+<text x="714" y="189" class="t mb">tree finish</text>
+<text x="688" y="214" style="font-size:11.5px" class="t m ghost-t">− collection-files/</text>
+<text x="688" y="233" style="font-size:11.5px" class="t m keep-t">~ the collection JSON</text>
+<text x="688" y="252" class="t xs">only the edited lines</text>
+<path d="M300 280v8H664v-8" class="ln temp-l"/>
+<text x="482" y="308" class="t s" text-anchor="middle">Review these: small diffs, one file per request, folder or script</text>
+<path d="M676 280v8H852v-8" class="ln keep-l"/>
+<text x="764" y="308" class="t s" text-anchor="middle">Merged: the JSON only</text>
+</svg>

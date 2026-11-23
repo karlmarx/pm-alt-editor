@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 250" width="960" height="250" role="img" aria-labelledby="t d">
+<title id="t">The four modes</title><desc id="d">A collection holds requests, folders, variables and auth, and scripts. Fix tests works on the scripts as .js files. Review shows your script edits on a read-only page. Merge works on the whole file when git reports a conflict. Whole collection, which is experimental, turns everything into temporary files.</desc>
+<style>
+.bg{fill:#f6f7f9}.card{fill:#fff;stroke:#dde1e6}
+.t{font:14px system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#1b1f24}
+.h{font-weight:650;font-size:15px}.s{font-size:12.5px;fill:#5d6570}.xs{font-size:11.5px;fill:#5d6570}
+.m{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;font-size:12.5px}
+.mb{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;font-size:13px;font-weight:700}
+.ln{fill:none;stroke:#7d8691;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.ln-f{fill:#7d8691}
+.dot{fill:#fff;stroke:#7d8691;stroke-width:1.6}
+.keep{fill:#e2f5e8;stroke:#1f8a4c}.keep-t{fill:#17753f}.keep-l{stroke:#1f8a4c}.keep-f{fill:#1f8a4c}
+.temp{fill:#fff1d6;stroke:#c98a2b}.temp-t{fill:#9a4d00}.temp-l{stroke:#c98a2b}.temp-f{fill:#c98a2b}
+.act{fill:#e4edff;stroke:#2f6fde}.act-t{fill:#1a56c4}.act-l{stroke:#2f6fde}.act-f{fill:#2f6fde}
+.fold{fill:#fff;fill-opacity:.55}
+.dash{stroke-dasharray:5 4}.ghost{fill:none;stroke:#aab1ba;stroke-dasharray:5 4}.ghost-t{fill:#7d8691}
+.num{fill:#4f52d6}.num-t{fill:#fff;font:700 13px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.dim{opacity:.45}.thick{stroke-width:2.4}
+.c1{fill:#7a5af5}.c2{fill:#1a8fe3}.c3{fill:#d9822b}.c4{fill:#2e9e5b}.c5{fill:#d6457a}
+.ln.k1{stroke:#7a5af5}.ln.k2{stroke:#1a8fe3}.ln.k3{stroke:#d9822b}.ln.k4{stroke:#2e9e5b}.ln.k5{stroke:#d6457a}
+@media (prefers-color-scheme:dark){
+.bg{fill:#14171b}.card{fill:#1b1f24;stroke:#2c323a}
+.t{fill:#e7e9ec}.s,.xs{fill:#9aa2ac}
+.ln{stroke:#8d96a1}.ln-f{fill:#8d96a1}.ghost{stroke:#5d6570}.ghost-t{fill:#8d96a1}.dot{fill:#1b1f24;stroke:#8d96a1}
+.keep{fill:#12301f;stroke:#3fae6f}.keep-t{fill:#63d394}.keep-l{stroke:#3fae6f}.keep-f{fill:#3fae6f}
+.temp{fill:#36270d;stroke:#d59a3c}.temp-t{fill:#f0b65c}.temp-l{stroke:#d59a3c}.temp-f{fill:#d59a3c}
+.act{fill:#13233f;stroke:#5c93f2}.act-t{fill:#8db6ff}.act-l{stroke:#5c93f2}.act-f{fill:#5c93f2}
+.fold{fill:#000;fill-opacity:.25}
+.num{fill:#8a8dff}.num-t{fill:#14171b}
+}</style><defs>
+<marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ln-f"/></marker>
+<marker id="ak" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="keep-f"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="temp-f"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="act-f"/></marker>
+</defs>
+<rect width="960" height="250" rx="14" class="bg"/>
+<path d="M28 34h170l14 14v130a6 6 0 0 1 -6 6h-178a6 6 0 0 1 -6 -6v-138a6 6 0 0 1 6 -6z" class="card"/><path d="M198 34v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<text x="38" y="62" class="t h">a collection</text>
+<rect x="38" y="78" width="158" height="40" rx="7" class="keep"/>
+<text x="117" y="95" class="t xs keep-t" text-anchor="middle">requests · folders</text>
+<text x="117" y="109" class="t xs keep-t" text-anchor="middle">variables · auth</text>
+<rect x="38" y="126" width="158" height="40" rx="7" class="act"/>
+<text x="117" y="151" class="t xs act-t" text-anchor="middle">scripts</text>
+<text x="117" y="210" class="t s" text-anchor="middle">What each mode works on</text>
+<rect x="244" y="34" width="166" height="182" rx="12" class="card"/>
+<text x="258" y="62" class="t h">Fix tests</text>
+<rect x="258" y="78" width="46" height="22" rx="5" class="ghost"/>
+<rect x="258" y="104" width="46" height="22" rx="5" class="act"/>
+<text x="258" y="152" class="t xs">the scripts, as</text>
+<text x="258" y="167" class="t xs">.js files</text>
+<text x="258" y="200" class="t m">pmx unpack · test</text>
+<rect x="422" y="34" width="166" height="182" rx="12" class="card"/>
+<text x="436" y="62" class="t h">Review</text>
+<rect x="436" y="78" width="46" height="22" rx="5" class="ghost"/>
+<rect x="436" y="104" width="46" height="22" rx="5" class="act dim"/>
+<text x="492" y="120" class="t xs">read-only</text>
+<text x="436" y="152" class="t xs">your script edits,</text>
+<text x="436" y="167" class="t xs">read-only page</text>
+<text x="436" y="200" class="t m">pmx view</text>
+<rect x="600" y="34" width="166" height="182" rx="12" class="card"/>
+<text x="614" y="62" class="t h">Merge</text>
+<rect x="614" y="78" width="46" height="22" rx="5" class="keep"/>
+<rect x="614" y="104" width="46" height="22" rx="5" class="act"/>
+<text x="614" y="152" class="t xs">the whole file, when</text>
+<text x="614" y="167" class="t xs">git reports a conflict</text>
+<text x="614" y="200" class="t m">treemerge</text>
+<rect x="778" y="34" width="166" height="182" rx="12" class="card"/>
+<text x="792" y="62" class="t h">Whole collection</text>
+<rect x="792" y="78" width="46" height="22" rx="5" class="temp"/>
+<rect x="792" y="104" width="46" height="22" rx="5" class="temp"/>
+<text x="792" y="152" class="t xs">everything, as</text>
+<text x="792" y="167" class="t xs">temporary files</text>
+<text x="792" y="200" class="t m">pmx tree …</text>
+<text x="848" y="120" class="t xs temp-t">experimental</text>
+</svg>

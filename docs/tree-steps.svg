@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 404" width="960" height="404" role="img" aria-labelledby="t d">
+<title id="t">The four steps of the whole-collection mode</title><desc id="d">Unpack splits the collection JSON into files. You edit the files in the page or by hand. Test builds the JSON from them and runs newman, repeated until the tests pass. Finish removes the files, so only the collection JSON is merged.</desc>
+<style>
+.bg{fill:#f6f7f9}.card{fill:#fff;stroke:#dde1e6}
+.t{font:14px system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#1b1f24}
+.h{font-weight:650;font-size:15px}.s{font-size:12.5px;fill:#5d6570}.xs{font-size:11.5px;fill:#5d6570}
+.m{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;font-size:12.5px}
+.mb{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;font-size:13px;font-weight:700}
+.ln{fill:none;stroke:#7d8691;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.ln-f{fill:#7d8691}
+.dot{fill:#fff;stroke:#7d8691;stroke-width:1.6}
+.keep{fill:#e2f5e8;stroke:#1f8a4c}.keep-t{fill:#17753f}.keep-l{stroke:#1f8a4c}.keep-f{fill:#1f8a4c}
+.temp{fill:#fff1d6;stroke:#c98a2b}.temp-t{fill:#9a4d00}.temp-l{stroke:#c98a2b}.temp-f{fill:#c98a2b}
+.act{fill:#e4edff;stroke:#2f6fde}.act-t{fill:#1a56c4}.act-l{stroke:#2f6fde}.act-f{fill:#2f6fde}
+.fold{fill:#fff;fill-opacity:.55}
+.dash{stroke-dasharray:5 4}.ghost{fill:none;stroke:#aab1ba;stroke-dasharray:5 4}.ghost-t{fill:#7d8691}
+.num{fill:#4f52d6}.num-t{fill:#fff;font:700 13px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.dim{opacity:.45}.thick{stroke-width:2.4}
+.c1{fill:#7a5af5}.c2{fill:#1a8fe3}.c3{fill:#d9822b}.c4{fill:#2e9e5b}.c5{fill:#d6457a}
+.ln.k1{stroke:#7a5af5}.ln.k2{stroke:#1a8fe3}.ln.k3{stroke:#d9822b}.ln.k4{stroke:#2e9e5b}.ln.k5{stroke:#d6457a}
+@media (prefers-color-scheme:dark){
+.bg{fill:#14171b}.card{fill:#1b1f24;stroke:#2c323a}
+.t{fill:#e7e9ec}.s,.xs{fill:#9aa2ac}
+.ln{stroke:#8d96a1}.ln-f{fill:#8d96a1}.ghost{stroke:#5d6570}.ghost-t{fill:#8d96a1}.dot{fill:#1b1f24;stroke:#8d96a1}
+.keep{fill:#12301f;stroke:#3fae6f}.keep-t{fill:#63d394}.keep-l{stroke:#3fae6f}.keep-f{fill:#3fae6f}
+.temp{fill:#36270d;stroke:#d59a3c}.temp-t{fill:#f0b65c}.temp-l{stroke:#d59a3c}.temp-f{fill:#d59a3c}
+.act{fill:#13233f;stroke:#5c93f2}.act-t{fill:#8db6ff}.act-l{stroke:#5c93f2}.act-f{fill:#5c93f2}
+.fold{fill:#000;fill-opacity:.25}
+.num{fill:#8a8dff}.num-t{fill:#14171b}
+}</style><defs>
+<marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ln-f"/></marker>
+<marker id="ak" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="keep-f"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="temp-f"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="act-f"/></marker>
+</defs>
+<rect width="960" height="404" rx="14" class="bg"/>
+<rect x="18" y="16" width="221" height="292" rx="12" class="card"/>
+<circle cx="42" cy="42" r="11" class="num"/><text x="42" y="46.5" class="num-t" text-anchor="middle">1</text>
+<text x="62" y="47" class="t mb">tree unpack</text>
+<text x="128.5" y="292" class="t s" text-anchor="middle">Split into small files</text>
+<path d="M44 72h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="keep"/><path d="M112 72v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<text x="78" y="102" class="t xs keep-t" text-anchor="middle">collection</text>
+<text x="78" y="116" class="t xs keep-t" text-anchor="middle">JSON</text>
+<path d="M56 192h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="temp"/><path d="M124 192v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<path d="M50 197h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="temp"/><path d="M118 197v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<path d="M44 202h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="temp"/><path d="M112 202v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<text x="78" y="239" class="t xs temp-t" text-anchor="middle">files</text>
+<path d="M80 140V186" class="ln temp-l" marker-end="url(#at)"/>
+<text x="146" y="154" class="t xs">one file per</text>
+<text x="146" y="171" class="t xs">request, folder</text>
+<text x="146" y="188" class="t xs">and script</text>
+<rect x="252" y="16" width="221" height="292" rx="12" class="card"/>
+<circle cx="276" cy="42" r="11" class="num"/><text x="276" y="46.5" class="num-t" text-anchor="middle">2</text>
+<text x="296" y="47" class="t mb">tree ui</text>
+<text x="362.5" y="292" class="t s" text-anchor="middle">Edit in the page, or by hand</text>
+<path d="M278 72h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="keep dim"/><path d="M346 72v9a5 5 0 0 0 5 5h9z" class="fold dim"/>
+<text x="312" y="102" class="t xs keep-t" text-anchor="middle">collection</text>
+<text x="312" y="116" class="t xs keep-t" text-anchor="middle">JSON</text>
+<text x="374" y="108" class="t xs">not touched yet</text>
+<path d="M290 192h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="temp"/><path d="M358 192v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<path d="M284 197h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="temp"/><path d="M352 197v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<path d="M278 202h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="temp"/><path d="M346 202v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<text x="312" y="239" class="t xs temp-t" text-anchor="middle">files</text>
+<rect x="404" y="198" width="58" height="52" rx="8" class="act"/>
+<path d="M404 214h58" class="ln act-l" />
+<circle cx="414" cy="206" r="2.4" class="act-f"/>
+<circle cx="423" cy="206" r="2.4" class="act-f"/>
+<circle cx="432" cy="206" r="2.4" class="act-f"/>
+<text x="433" y="233" class="t xs act-t" text-anchor="middle">the page</text>
+<path d="M399 228H378" class="ln temp-l" marker-end="url(#at)"/>
+<text x="433" y="166" class="t xs" text-anchor="middle">forms, scripts,</text>
+<text x="433" y="180" class="t xs" text-anchor="middle">diffs</text>
+<rect x="486" y="16" width="221" height="292" rx="12" class="card"/>
+<circle cx="510" cy="42" r="11" class="num"/><text x="510" y="46.5" class="num-t" text-anchor="middle">3</text>
+<text x="530" y="47" class="t mb">tree test</text>
+<text x="596.5" y="292" class="t s" text-anchor="middle">Build the JSON, run newman</text>
+<path d="M512 72h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="keep"/><path d="M580 72v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<text x="546" y="102" class="t xs keep-t" text-anchor="middle">collection</text>
+<text x="546" y="116" class="t xs keep-t" text-anchor="middle">JSON</text>
+<path d="M524 192h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="temp"/><path d="M592 192v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<path d="M518 197h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="temp"/><path d="M586 197v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<path d="M512 202h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="temp"/><path d="M580 202v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<text x="546" y="239" class="t xs temp-t" text-anchor="middle">files</text>
+<path d="M548 186V142" class="ln keep-l" marker-end="url(#ak)"/>
+<text x="558" y="161" class="t xs">only changed</text>
+<text x="558" y="175" class="t xs">lines move</text>
+<rect x="614" y="80" width="76" height="40" rx="8" class="act"/>
+<text x="652" y="105" class="t xs act-t" text-anchor="middle">newman</text>
+<path d="M596 102H609" class="ln act-l" marker-end="url(#aa)"/>
+<path d="M670 124V222H608" class="ln dash" marker-end="url(#a)"/>
+<text x="614" y="242" class="t xs">pass or fail,</text>
+<text x="614" y="256" class="t xs">with file:line</text>
+<rect x="720" y="16" width="221" height="292" rx="12" class="card"/>
+<circle cx="744" cy="42" r="11" class="num"/><text x="744" y="46.5" class="num-t" text-anchor="middle">4</text>
+<text x="764" y="47" class="t mb">tree finish</text>
+<text x="830.5" y="292" class="t s" text-anchor="middle">Only the JSON is merged</text>
+<path d="M746 72h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="keep"/><path d="M814 72v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<text x="780" y="102" class="t xs keep-t" text-anchor="middle">collection</text>
+<text x="780" y="116" class="t xs keep-t" text-anchor="middle">JSON</text>
+<path d="M758 192h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="ghost"/><path d="M826 192v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<path d="M752 197h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="ghost"/><path d="M820 197v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<path d="M746 202h68l14 14v42a6 6 0 0 1 -6 6h-76a6 6 0 0 1 -6 -6v-50a6 6 0 0 1 6 -6z" class="ghost"/><path d="M814 202v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<text x="780" y="239" class="t xs ghost-t" text-anchor="middle">removed</text>
+<rect x="854" y="82" width="68" height="38" rx="8" class="keep"/>
+<text x="888" y="106" class="t xs keep-t" text-anchor="middle">merge</text>
+<path d="M830 102H849" class="ln keep-l" marker-end="url(#ak)"/>
+<text x="846" y="222" class="t xs">files are gone,</text>
+<text x="846" y="239" class="t xs">the JSON holds</text>
+<text x="846" y="256" class="t xs">every edit</text>
+<path d="M596.5 312C596.5 350 362.5 350 362.5 318" class="ln" marker-end="url(#a)"/>
+<text x="479.5" y="358" class="t s" text-anchor="middle">repeat until the tests pass</text>
+<rect x="18" y="371" width="14" height="14" rx="4" class="keep"/>
+<text x="39" y="383" class="t xs">collection JSON: kept and merged</text>
+<rect x="254" y="371" width="14" height="14" rx="4" class="temp"/>
+<text x="275" y="383" class="t xs">the files: temporary</text>
+<rect x="766" y="371" width="14" height="14" rx="4" class="act"/>
+<text x="787" y="383" class="t xs">runs on your machine</text>
+</svg>
