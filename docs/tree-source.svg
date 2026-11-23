@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 330" width="960" height="330" role="img" aria-labelledby="t d">
+<title id="t">The files as the source of the collection</title><desc id="d">The files are kept, reviewed and merged in git. tree build generates the collection JSON from them; newman and Postman use that JSON. tree verify checks in CI that the JSON is what the files generate. An export from Postman comes back into the files with tree import.</desc>
+<style>
+.bg{fill:#f6f7f9}.card{fill:#fff;stroke:#dde1e6}
+.t{font:14px system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#1b1f24}
+.h{font-weight:650;font-size:15px}.s{font-size:12.5px;fill:#5d6570}.xs{font-size:11.5px;fill:#5d6570}
+.m{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;font-size:12.5px}
+.mb{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;font-size:13px;font-weight:700}
+.ln{fill:none;stroke:#7d8691;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.ln-f{fill:#7d8691}
+.dot{fill:#fff;stroke:#7d8691;stroke-width:1.6}
+.gen{fill:#fff;stroke:#7d8691;stroke-dasharray:5 4}.gen-t{fill:#5d6570}
+.keep{fill:#e2f5e8;stroke:#1f8a4c}.keep-t{fill:#17753f}.keep-l{stroke:#1f8a4c}.keep-f{fill:#1f8a4c}
+.temp{fill:#fff1d6;stroke:#c98a2b}.temp-t{fill:#9a4d00}.temp-l{stroke:#c98a2b}.temp-f{fill:#c98a2b}
+.act{fill:#e4edff;stroke:#2f6fde}.act-t{fill:#1a56c4}.act-l{stroke:#2f6fde}.act-f{fill:#2f6fde}
+.fold{fill:#fff;fill-opacity:.55}
+.dash{stroke-dasharray:5 4}.ghost{fill:none;stroke:#aab1ba;stroke-dasharray:5 4}.ghost-t{fill:#7d8691}
+.num{fill:#4f52d6}.num-t{fill:#fff;font:700 13px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.dim{opacity:.45}.thick{stroke-width:2.4}
+.c1{fill:#7a5af5}.c2{fill:#1a8fe3}.c3{fill:#d9822b}.c4{fill:#2e9e5b}.c5{fill:#d6457a}
+.ln.k1{stroke:#7a5af5}.ln.k2{stroke:#1a8fe3}.ln.k3{stroke:#d9822b}.ln.k4{stroke:#2e9e5b}.ln.k5{stroke:#d6457a}
+@media (prefers-color-scheme:dark){
+.bg{fill:#14171b}.card{fill:#1b1f24;stroke:#2c323a}
+.t{fill:#e7e9ec}.s,.xs{fill:#9aa2ac}
+.ln{stroke:#8d96a1}.ln-f{fill:#8d96a1}.ghost{stroke:#5d6570}.ghost-t{fill:#8d96a1}.dot{fill:#1b1f24;stroke:#8d96a1}.gen{fill:#1b1f24;stroke:#8d96a1}.gen-t{fill:#9aa2ac}
+.keep{fill:#12301f;stroke:#3fae6f}.keep-t{fill:#63d394}.keep-l{stroke:#3fae6f}.keep-f{fill:#3fae6f}
+.temp{fill:#36270d;stroke:#d59a3c}.temp-t{fill:#f0b65c}.temp-l{stroke:#d59a3c}.temp-f{fill:#d59a3c}
+.act{fill:#13233f;stroke:#5c93f2}.act-t{fill:#8db6ff}.act-l{stroke:#5c93f2}.act-f{fill:#5c93f2}
+.fold{fill:#000;fill-opacity:.25}
+.num{fill:#8a8dff}.num-t{fill:#14171b}
+}</style><defs>
+<marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ln-f"/></marker>
+<marker id="ak" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="keep-f"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="temp-f"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="act-f"/></marker>
+</defs>
+<rect width="960" height="330" rx="14" class="bg"/>
+<path d="M58 82h130l14 14v76a6 6 0 0 1 -6 6h-138a6 6 0 0 1 -6 -6v-84a6 6 0 0 1 6 -6z" class="keep"/><path d="M188 82v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<path d="M52 87h130l14 14v76a6 6 0 0 1 -6 6h-138a6 6 0 0 1 -6 -6v-84a6 6 0 0 1 6 -6z" class="keep"/><path d="M182 87v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<path d="M46 92h130l14 14v76a6 6 0 0 1 -6 6h-138a6 6 0 0 1 -6 -6v-84a6 6 0 0 1 6 -6z" class="keep"/><path d="M176 92v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<text x="109" y="138" class="t h keep-t" text-anchor="middle">the files</text>
+<text x="109" y="158" class="t xs" text-anchor="middle">one per request, script</text>
+<text x="115" y="218" class="t s" text-anchor="middle">kept, reviewed and merged</text>
+<text x="115" y="234" class="t s" text-anchor="middle">in git</text>
+<path d="M410 96h130l14 14v72a6 6 0 0 1 -6 6h-138a6 6 0 0 1 -6 -6v-80a6 6 0 0 1 6 -6z" class="gen"/><path d="M540 96v9a5 5 0 0 0 5 5h9z" class="fold"/>
+<text x="473" y="138" class="t h" text-anchor="middle">collection JSON</text>
+<text x="473" y="158" class="t xs gen-t" text-anchor="middle">generated</text>
+<path d="M212 140H394" class="ln thick keep-l" marker-end="url(#ak)"/>
+<text x="303" y="128" class="t mb" text-anchor="middle">tree build</text>
+<text x="303" y="164" class="t xs" text-anchor="middle">only what changed moves</text>
+<rect x="716" y="40" width="212" height="58" rx="10" class="act"/>
+<text x="732" y="65" class="t h act-t">newman</text>
+<text x="732" y="84" class="t xs">your tests, locally and in CI</text>
+<path d="M562 142C624 142 646 69 708 69" class="ln act-l" marker-end="url(#aa)"/>
+<rect x="716" y="128" width="212" height="58" rx="10" class="act"/>
+<text x="732" y="153" class="t h act-t">Postman</text>
+<text x="732" y="172" class="t xs">for whoever works there</text>
+<path d="M562 142C624 142 646 157 708 157" class="ln act-l" marker-end="url(#aa)"/>
+<path d="M822 194V252H109V246" class="ln dash" marker-end="url(#a)"/>
+<text x="468.5" y="242" class="t s" text-anchor="middle">an export from Postman comes back with   tree import</text>
+<text x="468.5" y="274" class="t xs" text-anchor="middle">It updates the files in place: a request that is still there keeps its file.</text>
+<rect x="342" y="26" width="274" height="40" rx="10" class="card"/>
+<text x="479" y="44" class="t mb" text-anchor="middle">tree verify</text>
+<text x="479" y="59" class="t xs" text-anchor="middle">in CI: is the JSON what the files generate?</text>
+<path d="M479 66V90" class="ln" marker-end="url(#a)"/>
+<rect x="40" y="299" width="14" height="14" rx="4" class="keep"/>
+<text x="61" y="311" class="t xs">kept and merged</text>
+<rect x="190" y="299" width="14" height="14" rx="4" class="gen"/>
+<text x="211" y="311" class="t xs">generated, never edited by hand</text>
+<rect x="430" y="299" width="14" height="14" rx="4" class="act"/>
+<text x="451" y="311" class="t xs">runs</text>
+</svg>

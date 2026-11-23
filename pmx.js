@@ -974,9 +974,9 @@ guards on every pack: only script lines you changed differ in the collection, wh
 edits are dropped, syntax errors and removed pm.test() calls are refused.
 
 experimental (needs pmx-tree.js next to this file; see its --help):
-  tree unpack | ui | status | pack | test | finish | check
-                             the whole collection as temporary files, with a local page to edit them: requests,
-                             folders, variables and scripts. The collection JSON stays what you keep and merge.`;
+  tree adopt | build | verify | import     the files are the source; the collection JSON is generated from them
+  tree unpack | pack | finish              or: the files are a temporary working copy of the collection JSON
+  tree ui | status | test | check          both: a local page to edit requests, folders, variables and scripts`;
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
